@@ -60,7 +60,7 @@ regex = "1.10"
 url = "2.5"
 rand = "0.10"
 clap = { version = "4.5", features = ["derive"] }
-croner = "4.0.1"
+croner = "5.0.0"
 
 # 数据库
 sea-orm = { version = "2.0.4", default-features = false, features = ["macros", "with-chrono", "with-json", "sqlite-use-returning-for-3_35"] }
@@ -87,7 +87,7 @@ toml = { version = "1.1" }
 validator = { version = "0.21", features = ["derive"] }
 schemars = "1.2.3"
 # 工具 schema 在离线环境下编译，解析引用时禁止读取本地文件或请求远程 URL。
-jsonschema = { version = "0.61.2", default-features = false }
+jsonschema = { version = "0.63.0", default-features = false }
 
 # 常用工具
 dashmap = { version = "6.2" }
