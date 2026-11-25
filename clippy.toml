@@ -1,0 +1,4 @@
+# 仅在测试代码里放行 unwrap/expect 与标准输出打印，生产代码保持严格约束。
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-print-in-tests = true

@@ -1,0 +1,11 @@
+use nuono_plugin::{ConfigSchema, serde::Deserialize};
+
+// 默认值、表单与校验从这份声明生成；已有 config.toml 中的用户值优先。
+// 文件名可改，但需在 lib.rs 引用模块并通过 config_fields() 注册。
+#[derive(Debug, Deserialize, ConfigSchema)]
+#[serde(crate = "nuono_plugin::serde")]
+pub struct Config {
+    /// 问候语
+    #[config(default = "你好呀！")]
+    pub greeting: String,
+}

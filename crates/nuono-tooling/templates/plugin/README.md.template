@@ -1,0 +1,69 @@
+# {{package_name}}
+
+这是一个基于 **Nuono** 的源码插件。它作为标准 Rust 库编写，并在启动时与 Nuono 宿主统一编译链接，无需额外的进程通信协议。
+
+---
+
+## 🚀 快速开始
+
+在 Nuono 仓库根目录下执行：
+
+```bash
+# 1. 检查插件结构与依赖
+cargo plugin doctor plugins/{{package_name}}
+cargo plugin check plugins/{{package_name}}
+
+# 2. 运行插件单元测试
+cargo plugin test plugins/{{package_name}}
+
+# 3. 启动 Nuono（会自动加载并链接本插件）
+cargo run
+```
+
+> 💡 **开发小贴士**：修改插件代码后，直接重新 `cargo run` 即可，框架会自动增量编译与链接，无需手动修改主工程的 `Cargo.toml`。
+
+---
+
+发送 `问候` 会收到默认的“你好呀！”。可先运行测试，再接入真实平台。
+
+完整首次开发路径沿同一个问候插件逐步加入参数、配置、按原生用户保存/清除称呼及本地测试，见文档站的「教程：问候插件」。状态使用 `ctx.state`，测试使用 `TestHost` 与 `TestBot`；无需为称呼新建表或启动数据库。
+
+## 🛠️ 常用开发指引
+
+### 1. 插件配置
+* 配置统一保存在框架数据库，通过插件设置页面编辑；插件声明默认值和配置表单。
+* 代码通过 `LiveConfig<T>` 获取配置快照；框架负责个人、群配置覆盖和修改通知。
+
+### 2. 消息响应与命令
+* **指令响应**：在 `service_config()` 中声明命令前缀，即可统一接收对应指令与 `on_event` 消息回调。
+* **被动监听**（如链接解析、无前缀消息等）：需在 `message_listener()` 中声明范围，并在 `on_message_listen()` 中处理。详细规则见[插件消息路由](https://github.com/xinxiuzhu/nuono/blob/main/docs/plugins/MESSAGE_ROUTING.md)。
+
+### 3. 数据库与后台任务
+* **小型运行状态**：先用 `ctx.state(collection, scope)`；用户作用域使用 `PluginStateScope::user(event.domain_event()...)`，不要拼接裸用户号。
+* **数据库迁移**：CREATE-only 的双后端 SQL 可用 `Plugin::migrations()`；涉及 ALTER 或数据转换时，用 `Plugin::storage_declaration()` 同时声明每版增量 SQL 和升级后的完整存储清单。表名使用自己的稳定前缀，SQLite 表使用 STRICT。宿主在 `on_load` 前登记，已发布的版本、摘要和完整清单不能改写；卸载代码仍保留这些清单及数据。
+* **数据库**：统一通过 SeaORM 访问宿主数据库（`ctx.db` 复用连接池，事务使用 `ctx.db.begin()`），无需自行引入驱动或建立额外连接。
+* **生命周期**：`on_load` 绑定 `PluginRuntime` / 配置并准备本地资源。管理服务开始提供访问且首个管理员设置完成后，框架调用 `on_enable` 并放行 `ctx.spawn` / `ctx.schedule` 等后台业务。外部连接放在受管任务中，连接失败只影响该插件功能。
+* **初始化辅助**：在 `on_load` 直接等待有限初始化；必须并发时可用 `ctx.tasks.try_spawn_initialization`。不要等待尚未放行的普通后台任务，也不要自行创建永久任务。停用时宿主取消并等待任务退出。
+* **启用开关**：由框架统一保存；需要外部服务的插件可在 `service_config()` 返回的 `Plugins` 上设置 `enabled = false` 作为首次安装默认值。不要在业务配置中再加第二个总开关。
+
+### 4. 插件图标
+在插件根目录（与 `Cargo.toml` 同级）放置 `icon.svg`、`icon.png` 或 `icon.webp`（建议尺寸 128×128 以上透明背景），Nuono 启动时会自动将图标编入系统并在 Web 后台中美观展示。
+
+---
+
+## 📦 独立打包与部署
+
+当插件开发完成，若需交付给用户使用，可直接导出包含已安装插件的独立可执行程序：
+
+```bash
+cargo run --release -- build --output dist/nuono
+```
+
+导出的二进制程序已将插件完整打包，目标运行机器无需安装 Rust/Cargo 或保留源码。
+
+---
+
+## 📖 更多参考
+
+* 深入阅读：[Nuono 插件开发指南](https://github.com/xinxiuzhu/nuono/blob/main/docs/plugins/README.md)
+* ⚠️ **安全提醒**：插件与宿主运行在同一进程和地址空间中，拥有同等系统权限，请仅加载和运行受信任的代码。

@@ -1,0 +1,50 @@
+[package]
+name = "nuono-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Event processing and action execution use cases for Nuono"
+
+[dependencies]
+utoipa = { workspace = true }
+sea-orm = { workspace = true }
+regex = { workspace = true }
+anyhow = { workspace = true }
+nuono-error = { workspace = true }
+nuono-ai = { workspace = true }
+nuono-rag = { workspace = true }
+nuono-memory = { workspace = true }
+validator = { workspace = true }
+rand = { workspace = true }
+hmac = { workspace = true }
+sha1 = "0.11"
+nuono-domain = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+# 仅共享 cron 解析器，本 crate 不负责实际调度执行。
+croner = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+uuid = { workspace = true }
+base64 = { workspace = true }
+url = { workspace = true }
+dashmap = { workspace = true }
+
+unicode-segmentation = { workspace = true }
+tracing = { workspace = true }
+
+tokio = { workspace = true, features = ["sync", "time", "macros"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

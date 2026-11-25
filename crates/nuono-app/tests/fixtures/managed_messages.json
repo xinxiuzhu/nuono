@@ -1,0 +1,198 @@
+[
+  {
+    "kind": "group",
+    "id": "123",
+    "parent": "",
+    "scheme": "native",
+    "request": {
+      "route": {
+        "platform": "onebot",
+        "instance_id": "second",
+        "bot_self_id": "42"
+      },
+      "target": {
+        "type": "conversation",
+        "conversation": {
+          "type": "group",
+          "group": {
+            "platform": "one_bot",
+            "kind": "group",
+            "scheme": "native",
+            "value": "123",
+            "namespace": null
+          }
+        }
+      },
+      "message_type": "markdown",
+      "message": "**hello**"
+    }
+  },
+  {
+    "kind": "private",
+    "id": "00AbC",
+    "parent": "",
+    "scheme": "open_id",
+    "request": {
+      "route": {
+        "platform": "qq_official",
+        "instance_id": "second",
+        "bot_self_id": "0007"
+      },
+      "target": {
+        "type": "actor",
+        "actor": {
+          "platform": "qq_official",
+          "kind": "user",
+          "scheme": "open_id",
+          "value": "00AbC",
+          "namespace": "0007"
+        }
+      },
+      "message_type": "markdown",
+      "message": "**hello**"
+    }
+  },
+  {
+    "kind": "group",
+    "id": "-100123",
+    "parent": "",
+    "scheme": "numeric",
+    "request": {
+      "route": {
+        "platform": "telegram",
+        "instance_id": "second",
+        "bot_self_id": "42"
+      },
+      "target": {
+        "type": "conversation",
+        "conversation": {
+          "type": "group",
+          "group": {
+            "platform": "telegram",
+            "kind": "group",
+            "scheme": "numeric",
+            "value": "-100123",
+            "namespace": null
+          }
+        }
+      },
+      "message_type": "markdown",
+      "message": "**hello**"
+    }
+  },
+  {
+    "kind": "channel",
+    "id": "18446744073709551610",
+    "parent": "900000000000000001",
+    "scheme": "snowflake",
+    "request": {
+      "route": {
+        "platform": "discord",
+        "instance_id": "second",
+        "bot_self_id": "bot"
+      },
+      "target": {
+        "type": "channel",
+        "channel": {
+          "platform": "discord",
+          "kind": "channel",
+          "scheme": "snowflake",
+          "value": "18446744073709551610",
+          "namespace": null
+        },
+        "parent": {
+          "platform": "discord",
+          "kind": "group",
+          "scheme": "snowflake",
+          "value": "900000000000000001",
+          "namespace": null
+        }
+      },
+      "message_type": "markdown",
+      "message": "**hello**"
+    }
+  },
+  {
+    "kind": "private",
+    "id": "00User",
+    "parent": "",
+    "scheme": "user_id",
+    "request": {
+      "route": {
+        "platform": "feishu",
+        "instance_id": "second",
+        "bot_self_id": "cli_1"
+      },
+      "target": {
+        "type": "actor",
+        "actor": {
+          "platform": "feishu",
+          "kind": "user",
+          "scheme": "user_id",
+          "value": "00User",
+          "namespace": "cli_1"
+        }
+      },
+      "message_type": "markdown",
+      "message": "**hello**"
+    }
+  },
+  {
+    "kind": "group",
+    "id": "oc_01",
+    "parent": "",
+    "scheme": "chat_id",
+    "request": {
+      "route": {
+        "platform": "feishu",
+        "instance_id": "second",
+        "bot_self_id": "cli_1"
+      },
+      "target": {
+        "type": "conversation",
+        "conversation": {
+          "type": "group",
+          "group": {
+            "platform": "feishu",
+            "kind": "group",
+            "scheme": "chat_id",
+            "value": "oc_01",
+            "namespace": "cli_1"
+          }
+        }
+      },
+      "message_type": "markdown",
+      "message": "**hello**"
+    }
+  },
+  {
+    "kind": "group",
+    "id": "!room:server",
+    "parent": "",
+    "scheme": "native",
+    "request": {
+      "route": {
+        "platform": "matrix",
+        "instance_id": "second",
+        "bot_self_id": "@bot:server"
+      },
+      "target": {
+        "type": "conversation",
+        "conversation": {
+          "type": "group",
+          "group": {
+            "platform": {
+              "other": "matrix"
+            },
+            "kind": "group",
+            "scheme": "native",
+            "value": "!room:server",
+            "namespace": null
+          }
+        }
+      },
+      "message_type": "markdown",
+      "message": "**hello**"
+    }
+  }
+]

@@ -1,0 +1,24 @@
+use nuono_adapter::*;
+use std::sync::Arc;
+
+struct Provider;
+pub fn nuono_create_adapter() -> Arc<dyn AdapterProvider> { Arc::new(Provider) }
+
+#[async_trait::async_trait]
+impl AdapterProvider for Provider {
+    fn descriptor(&self) -> AdapterDescriptor {
+        AdapterDescriptor {
+            id: "__NAME__".into(), platform: "__NAME__".into(), display_name: "__NAME__".into(),
+            description: "平台适配器".into(), supports_multiple_instances: true,
+            fields: vec![], secret_fields: vec![],
+        }
+    }
+    fn normalize(&self, bot: &BotIdentity, event: &UnifiedEvent, received: DateTime<Utc>) -> std::result::Result<DomainEvent,DomainModelError> {
+        // Replace this canonical DTO projection with this platform's native identity rules.
+        nuono_adapter::canonical::normalize_event(bot,event,received)
+    }
+    async fn create(&self, _config: AdapterInstanceConfig, _host: Arc<dyn AdapterHost>) -> Result<Arc<dyn AdapterRuntime>> {
+        // Implement AdapterRuntime::run; own producers and RouteLease until stop completes.
+        Err(NuonoError::Validation("请先实现平台连接与收发逻辑".into()))
+    }
+}

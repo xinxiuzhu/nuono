@@ -1,0 +1,94 @@
+name: Extension Catalog
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "registry/entries/**"
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extension-catalog
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event_name != 'issues'
+      || github.event.label.name == 'extension:approved'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.100.0"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Import approved extension issue
+        if: github.event_name == 'issues'
+        id: import
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ISSUE_BODY" > /tmp/extension-issue.md
+          if ! OUTPUT=$(cargo xtask registry import-issue --issue-body-file /tmp/extension-issue.md 2>&1); then
+            gh issue comment "$ISSUE_NUMBER" --body "扩展条目校验失败，请修正后联系维护者重新审核：
+
+          \`\`\`
+          $OUTPUT
+          \`\`\`"
+            gh issue edit "$ISSUE_NUMBER" --remove-label "extension:approved" || true
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add registry/entries/
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(registry): approve extension from #${ISSUE_NUMBER}"
+            git push origin main
+          fi
+
+      - name: Build catalog
+        run: |
+          cargo xtask registry validate
+          cargo xtask registry build --out /tmp/nuono-catalog
+
+      - name: Publish catalog branch
+        run: |
+          set -euo pipefail
+          SOURCE_SHA=$(git rev-parse HEAD)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan catalog-publish
+          git rm -rf . >/dev/null 2>&1 || true
+          cp /tmp/nuono-catalog/extensions-v2.json extensions-v2.json
+          cp /tmp/nuono-catalog/catalog.json catalog.json
+          git add extensions-v2.json catalog.json
+          git commit -m "chore(catalog): publish from ${SOURCE_SHA}"
+          git push --force origin HEAD:refs/heads/catalog
+
+      - name: Close approved issue
+        if: github.event_name == 'issues'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --body "已审核并发布到官方扩展目录（\`catalog/extensions-v2.json\`）。"
+          gh issue close "$ISSUE_NUMBER" --reason completed

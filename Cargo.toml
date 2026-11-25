@@ -1,0 +1,163 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/nuono-domain",
+    "crates/nuono-app",
+    "crates/nuono-adapter",
+    "crates/nuono-ai",
+    "crates/nuono-ai-provider",
+    "crates/nuono-rag",
+    "crates/nuono-memory",
+    "crates/nuono-error",
+    "crates/nuono-storage",
+    "crates/nuono-core",
+    "crates/nuono-server",
+    "crates/nuono-tooling",
+    "crates/nuono-plugin-macros",
+    "crates/nuono-plugin",
+    "crates/nuono-plugin-test",
+]
+default-members = ["crates/nuono-tooling"]
+exclude = ["adapters/*", "xtask/fixtures/adapter-host"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+authors = ["Nuono Team"]
+rust-version = "1.100.0"
+license = "GPL-3.0-only"
+repository = "https://github.com/xinxiuzhu/nuono"
+# workspace 内部 crate 均未发布到 crates.io，彼此用 path 依赖互相引用
+publish = false
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+dbg_macro = "warn"
+todo = "warn"
+redundant_clone = "warn"
+rc_buffer = "warn"
+
+[workspace.dependencies]
+nuono-tooling = { path = "crates/nuono-tooling" }
+nuono-adapter = { path = "crates/nuono-adapter" }
+# 核心基础设施
+tokio = { version = "1.54.0", default-features = false, features = ["rt", "sync", "time"] }
+tokio-util = { version = "0.7.20", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["raw_value"] }
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10.4"
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+regex = "1.10"
+url = "2.5"
+rand = "0.10"
+clap = { version = "4.5", features = ["derive"] }
+croner = "4.0.1"
+
+# 数据库
+sea-orm = { version = "2.0.4", default-features = false, features = ["macros", "with-chrono", "with-json", "sqlite-use-returning-for-3_35"] }
+fs2 = "0.4.3"
+
+# Web 与 HTTP/WS
+axum = { version = "0.8", features = ["ws", "multipart"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.7", features = ["cors", "fs", "trace", "sensitive-headers", "request-id", "set-header", "compression-gzip", "compression-br"] }
+reqwest = { version = "0.13", features = ["json", "stream"] }
+
+# OpenAPI 文档
+# 锁定 OpenAPI 相关依赖的精确版本，确保独立生成的应用中 schema 类型完全一致。
+# 官方版本已包含 ZIP 9 修复（zip 9.1.1），因此改用 crates.io 版本替代之前的 git 修订号锁定。
+utoipa = { version = "=6.0.0", features = ["axum_extras", "chrono"] }
+utoipa-axum = { version = "=0.3.0" }
+# 直接使用 Cargo 依赖内置的 UI 静态资源，避免在 build.rs 中从 GitHub 下载 ZIP 包。
+utoipa-swagger-ui = { version = "=10.0.2", features = ["axum", "vendored"] }
+
+# 配置
+toml = { version = "1.1" }
+
+# 校验与 Schema
+validator = { version = "0.21", features = ["derive"] }
+schemars = "1.2.3"
+# 工具 schema 在离线环境下编译，解析引用时禁止读取本地文件或请求远程 URL。
+jsonschema = { version = "0.61.2", default-features = false }
+
+# 常用工具
+dashmap = { version = "6.2" }
+async-trait = { version = "0.1" }
+uuid = { version = "1.0", features = ["v4", "v7", "serde"] }
+base64 = "0.23"
+bcrypt = "0.19"
+ed25519-dalek = "3"
+hex = "0.4"
+hmac = "0.13"
+sha2 = "0.11"
+ipnet = "2.11"
+if-addrs = "0.15"
+once_cell = "1.19"
+inventory = "0.3"
+unicode-segmentation = "1.12"
+unicode-width = "0.2"
+
+# 日志与观测
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt", "time", "local-time"] }
+tracing-appender = { version = "0.2" }
+
+# 指标
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
+
+# 图像处理
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+# 邮件（SMTP）
+lettre = { version = "0.11.23", default-features = false, features = [
+    "builder",
+    "hostname",
+    "smtp-transport",
+    "tokio1",
+    "tokio1-native-tls",
+] }
+
+# 过程宏
+syn = { version = "3", features = ["full"] }
+quote = "1"
+
+# 适配器工具
+urlencoding = "2"
+
+# Nuono 内部 crate
+nuono-domain = { path = "crates/nuono-domain" }
+nuono-app = { path = "crates/nuono-app" }
+nuono-ai = { path = "crates/nuono-ai" }
+nuono-ai-provider = { path = "crates/nuono-ai-provider" }
+nuono-rag = { path = "crates/nuono-rag" }
+nuono-memory = { path = "crates/nuono-memory" }
+nuono-plugin = { path = "crates/nuono-plugin" }
+nuono-core = { path = "crates/nuono-core" }
+nuono-error = { path = "crates/nuono-error" }
+nuono-storage = { path = "crates/nuono-storage" }
+nuono-plugin-macros = { path = "crates/nuono-plugin-macros" }
+
+# 在启动器和链接的应用之间复用增量编译产物。
+# 调试时如需完整符号表，请显式开启 debug。
+[profile.dev]
+debug = 0
+incremental = true
+
+# 启动阶段会频繁对大型应用二进制文件计算哈希，开发模式下也需要保持 SHA-256 的高性能。
+# 生成的应用会从当前 workspace 继承这些针对特定包的编译优化配置。
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.release]
+incremental = true
+panic = "unwind"
+strip = "debuginfo"

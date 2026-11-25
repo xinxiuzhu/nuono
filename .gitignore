@@ -1,0 +1,112 @@
+# Rust 构建产物
+target/
+/dist/
+/plugins/*/
+/plugins/.*.scaffold.lock
+*.profraw
+*.profdata
+
+# 运行时配置与状态
+/nuono.toml
+/backups/
+*.dump
+*.bak
+*.nuono-lock
+/data/*
+!/data/.gitkeep
+!/data/README.md
+/logs/*
+!/logs/.gitkeep
+!/logs/README.md
+
+# workspace 子 crate 下产生的运行日志
+crates/nuono-core/logs/
+crates/nuono-server/logs/
+
+# 本机密钥文件（文档与占位文件可正常提交）
+/secrets/*
+!/secrets/.gitkeep
+!/secrets/README.md
+
+# 本地环境文件可能包含凭据
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+!.env.*.example
+!.env.*.sample
+!.env.*.template
+
+# 仓库根目录生成的临时数据库文件（data/ 下已由上方规则忽略）
+/*.db
+/*.db-shm
+/*.db-wal
+/*.db-journal
+/*.sqlite
+/*.sqlite-shm
+/*.sqlite-wal
+/*.sqlite-journal
+/*.sqlite3
+/*.sqlite3-shm
+/*.sqlite3-wal
+/*.sqlite3-journal
+
+# 覆盖率与测试产物
+/coverage/
+/tarpaulin-report.html
+/cobertura.xml
+/lcov.info
+
+# 本地工具与编辑器状态
+/AGENTS.md
+/.claude/
+/.cursor/
+/.gemini/
+/.windsurf/
+/.freebuff/
+/.atomcode/
+/.zcode/
+/.direnv/
+/.superpowers/
+.cache/
+/.venv/
+/venv/
+/tmp/
+.history/
+.idea/
+/.vscode/*.local.*
+/.vscode/settings.local.json
+*.swp
+*.swo
+*~
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 本地界面测试截图
+/gui-test-screenshots/
+
+# 操作系统元数据文件
+.DS_Store
+._*
+.AppleDouble/
+.LSOverride
+__MACOSX/
+.Spotlight-V100/
+.Trashes/
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# 已安装的源码适配器由独立仓库维护，不纳入主仓库
+/adapters/*/
+
+# 保留历史构建暂存目录的忽略，避免旧副本中的私有扩展源码被误提交。
+/.nuono-private-build/

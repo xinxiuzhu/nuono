@@ -1,0 +1,24 @@
+[package]
+name = "nuono-plugin-test"
+description = "Nuono 插件单元测试工具：捕获型 TestBot、事件构造 helper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+nuono-plugin = { workspace = true }
+anyhow.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+tempfile = "3"
+
+[dev-dependencies]
+nuono-core = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+
+[lints]
+workspace = true

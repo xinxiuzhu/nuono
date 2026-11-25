@@ -1,0 +1,89 @@
+[package]
+name = "nuono-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+nuono-adapter = { workspace = true }
+nuono-plugin = { workspace = true, features = ["image"] }
+nuono-storage = { workspace = true }
+nuono-error = { workspace = true, features = ["database"] }
+nuono-domain = { workspace = true }
+nuono-app = { workspace = true }
+nuono-ai = { workspace = true }
+nuono-ai-provider = { workspace = true }
+# 核心基础设施
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net"] }
+serde = { workspace = true }
+validator = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }
+regex = { workspace = true }
+url = { workspace = true }
+rand = { workspace = true }
+ipnet = { workspace = true }
+
+# 数据库
+sea-orm = { workspace = true }
+
+# 配置
+toml = { workspace = true }
+toml_edit = "0.25.15"
+
+# 认证与邮件
+ed25519-dalek = { workspace = true }
+hex = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+lettre = { workspace = true }
+
+# 常用工具
+dashmap = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+base64 = { workspace = true }
+image = { workspace = true }
+ab_glyph = "0.2.32"
+unicode-width = { workspace = true }
+
+# WebSocket 与 OneBot
+http = "1.1"
+
+# 接口文档
+utoipa = { workspace = true }
+
+# HTTP 客户端
+reqwest = { workspace = true }
+
+# 日志与观测
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+
+# 指标
+metrics = { workspace = true }
+
+# 系统信息
+sysinfo = { version = "0.40", default-features = false, features = ["system", "disk"] }
+
+[dev-dependencies]
+nuono-adapter-fixture = { path = "../../xtask/fixtures/adapter-host" }
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "test-util"] }
+
+[target.'cfg(unix)'.dependencies]
+# 日志查看使用目录句柄和 NOFOLLOW，拒绝软链接与特殊文件。
+rustix = { version = "1.1.5", features = ["fs"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# 读取当前进程由系统统计的 physical footprint，区别于 RSS。
+libc = "0.2"
+
+[lints]
+workspace = true

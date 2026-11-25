@@ -1,0 +1,18 @@
+{
+  "description": "Small deterministic policy regression corpus. Vectors are analytical one-hot test inputs, not embeddings from a real model.",
+  "memories": [
+    {"id": 1, "key": "residence", "content": "2019年我在杭州租了第一间公寓。", "vector": [1, 0, 0, 0, 0, 0]},
+    {"id": 2, "key": "contact", "content": "林小满的电话号码末四位是3142。", "vector": [0, 1, 0, 0, 0, 0]},
+    {"id": 3, "key": "other-contact", "content": "林小雨的电话号码末四位是31428。", "vector": [0, 0, 1, 0, 0, 0]},
+    {"id": 4, "key": "tea", "content": "I prefer EarlGrey tea.", "vector": [0, 0, 0, 1, 0, 0]},
+    {"id": 5, "key": "interest", "content": "The rate is 3.0 percent.", "vector": [0, 0, 0, 0, 1, 0]},
+    {"id": 6, "key": "hobby", "content": "I am a pirate collecting stamps.", "vector": [0, 0, 0, 0, 0, 1]}
+  ],
+  "queries": [
+    {"query": "最早居住的城市", "expected": 1, "vector": [1, 0, 0, 0, 0, 0]},
+    {"query": "3142", "expected": 2, "vector": [0, 1, 0, 0, 0, 0]},
+    {"query": "EarlGrey", "expected": 4, "vector": [0, 0, 0, 1, 0, 0]},
+    {"query": "rate", "expected": 5, "vector": [0, 0, 0, 0, 1, 0]},
+    {"query": "火星轨道周期", "expected": null, "vector": [0, 0, 0, 0, 0, 0]}
+  ]
+}

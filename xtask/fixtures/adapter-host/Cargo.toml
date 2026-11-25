@@ -1,0 +1,11 @@
+[package]
+name = "nuono-adapter-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+[workspace]
+[dependencies]
+nuono-app = { path = "../../../crates/nuono-app" }
+nuono-error = { path = "../../../crates/nuono-error" }
+async-trait = "0.1"
+serde_json = "1"

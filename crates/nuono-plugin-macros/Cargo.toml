@@ -1,0 +1,20 @@
+[package]
+name = "nuono-plugin-macros"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = "1.0"
+
+[lints]
+workspace = true

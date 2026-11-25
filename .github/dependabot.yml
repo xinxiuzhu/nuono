@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directories:
+      - /
+      - /xtask
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 10
+    groups:
+      rust-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    # Rust 版本需与 rust-toolchain.toml 和 Cargo MSRV 一起手动评估。
+    # CI 通过显式 toolchain 输入选择版本，不按 action 的数字标签自动升级。
+    ignore:
+      - dependency-name: dtolnay/rust-toolchain
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:30"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 10

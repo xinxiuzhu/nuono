@@ -1,0 +1,71 @@
+[package]
+name = "nuono-plugin"
+description = "Nuono Rust 插件 SDK：共享类型、宿主能力、宏和配置助手"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+# 图片像素编码按需开启；设置与宿主策略读取始终可用。
+image = ["dep:image"]
+# 仅当已安装的源码插件显式启用时才链接内置浏览器引擎。
+obscura = ["dep:obscura-browser", "dep:obscura-js"]
+# 接入现有或本地 MCP 服务，并复用统一的插件工具生命周期与权限策略。
+mcp = ["dep:rmcp"]
+
+[dependencies]
+obscura-browser = { git = "https://github.com/h4ckf0r0day/obscura", rev = "8b3dd479a4b7e91a9fa8f3d3deb0fb6793a04861", default-features = false, optional = true }
+obscura-js = { git = "https://github.com/h4ckf0r0day/obscura", rev = "8b3dd479a4b7e91a9fa8f3d3deb0fb6793a04861", default-features = false, optional = true }
+sea-orm = { workspace = true }
+nuono-app = { workspace = true }
+nuono-rag = { workspace = true }
+nuono-ai = { workspace = true }
+nuono-domain = { workspace = true }
+nuono-error = { workspace = true }
+nuono-plugin-macros = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+rmcp = { version = "=3.10.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest-native-tls"], optional = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+url = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+dashmap = { workspace = true }
+regex = { workspace = true }
+uuid = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros"] }
+once_cell = { workspace = true }
+futures = { workspace = true }
+http = "1.1"
+inventory = { workspace = true }
+metrics = { workspace = true }
+image = { workspace = true, optional = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+tokio = { workspace = true, features = ["test-util", "net", "rt-multi-thread"] }
+tracing-subscriber = { workspace = true }
+
+[[test]]
+name = "obscura_smoke"
+path = "../../xtask/fixtures/obscura_smoke.rs"
+harness = false
+required-features = ["obscura"]
+
+[[test]]
+name = "mcp_stdio"
+path = "../../xtask/fixtures/mcp_stdio.rs"
+harness = false
+required-features = ["mcp"]
+
+[lints]
+workspace = true

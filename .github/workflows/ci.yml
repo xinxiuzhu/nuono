@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  CARGO_INCREMENTAL: "0"
+  # 安装步骤和开发工具发起的 Cargo 子构建共用项目工具链版本。
+  RUSTUP_TOOLCHAIN: "1.100.0"
+
+jobs:
+  tooling:
+    name: Rust development tools
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Keep repository tooling in Rust
+        # 仅保留现有的字体子集生成脚本用于更新仓库内字体资源；
+        # 构建与测试编排统一使用 Rust，不再引入其他 Python 工具。
+        run: test -z "$(git ls-files '*.py' '*.pyi' '*.ipynb' ':!:xtask/scripts/subset_status_font.py')"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --manifest-path xtask/Cargo.toml --all -- --check
+      - run: cargo test --manifest-path xtask/Cargo.toml --target-dir target --locked
+      - run: cargo clippy --manifest-path xtask/Cargo.toml --target-dir target --all-targets --locked -- -D warnings
+      - run: cargo xtask registry validate
+
+  app:
+    name: Application contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask architecture
+      - run: cargo test -p nuono-app --locked
+
+  domain:
+    name: Domain contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p nuono-domain --locked
+
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy (Rust 1.100.0)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
+          components: clippy
+      - name: Verify selected compiler
+        run: |
+          rustc --version
+          cargo --version
+          test "$(rustc --version | cut -d ' ' -f 2)" = "1.100.0"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  test:
+    name: Test (PostgreSQL, Rust 1.100.0)
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: nuono
+          POSTGRES_PASSWORD: nuono
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U nuono -d postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      NUONO_TEST_DATABASE_URL: postgres://nuono:nuono@127.0.0.1:5432/postgres
+      # 版本对齐：runner 自带 PG16 客户端会拒绝 dump PG18 服务器；备份测试需要 pg_dump 18。
+      NUONO_TEST_PG_CLIENT_BIN: /usr/lib/postgresql/18/bin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
+      - name: Install PostgreSQL 18 client (PGDG)
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-18
+      - name: Verify selected compiler
+        run: |
+          rustc --version
+          cargo --version
+          test "$(rustc --version | cut -d ' ' -f 2)" = "1.100.0"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --all-features --locked
+      - name: Portable migration and post-transfer business acceptance
+        run: cargo test -p nuono-storage portable --locked -- --ignored --test-threads=1
+      - run: cargo xtask plugin-templates
+
+  test-sqlite:
+    name: Test (SQLite, Rust 1.100.0)
+    runs-on: ubuntu-24.04
+    env:
+      # 测试基建按该变量把 test_db 全量切到 SQLite（无需数据库服务），双后端都不跳过。
+      NUONO_TEST_DATABASE_BACKEND: sqlite
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
+      - name: Verify selected compiler
+        run: |
+          rustc --version
+          cargo --version
+          test "$(rustc --version | cut -d ' ' -f 2)" = "1.100.0"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --all-features --locked
+      - run: cargo xtask plugin-templates
+      - run: cargo xtask source-startup
+
+  doc:
+    name: Rustdoc (Rust 1.100.0)
+    runs-on: ubuntu-24.04
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
+      - name: Verify selected compiler
+        run: |
+          rustc --version
+          cargo --version
+          test "$(rustc --version | cut -d ' ' -f 2)" = "1.100.0"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --all-features --no-deps --locked

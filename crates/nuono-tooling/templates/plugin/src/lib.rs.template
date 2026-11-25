@@ -1,0 +1,95 @@
+use nuono_plugin::prelude::*;
+use std::sync::Arc;
+mod default_config;
+use default_config::Config;
+
+#[derive(Default)]
+struct MyPlugin {
+    config: Arc<LiveConfig<Config>>,
+}
+
+#[nuono_command(pattern = "问候")]
+async fn greet(
+    bot: &Bot,
+    _event: &Event<'_>,
+    _data: MatchData,
+    config: &LiveConfig<Config>,
+) -> Result<()> {
+    let settings = config.snapshot()?;
+    bot.send(settings.greeting.as_str()).await?;
+    Ok(())
+}
+
+#[nuono_plugin(
+    name = "{{package_name}}",
+    version = "0.1.0",
+    description = "A Nuono plugin",
+    state_fields = "config"
+)]
+impl Plugin for MyPlugin {
+    fn config_fields(&self) -> Vec<PluginConfigField> {
+        Config::get_schema()
+    }
+
+    fn event_filter(&self) -> PluginEventFilter {
+        PluginEventFilter::MESSAGES
+    }
+
+    // 此处只准备本地资源。外连、轮询等业务在 on_enable 中登记为受管任务，
+    // 框架会等待管理服务及首次管理员设置完成后再放行。
+    async fn on_load(&mut self, ctx: &PluginContext) -> Result<()> {
+        self.config.bind(ctx)
+    }
+}
+
+register_plugin!(MyPlugin);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nuono_plugin::serde_json::json;
+    use nuono_plugin_test::{TestBot, TestHost, group_event};
+
+    #[test]
+    fn configuration_declaration_is_valid() {
+        nuono_plugin::config_validation::validate_config_fields(&Config::get_schema()).unwrap();
+        Config::from_value(&json!({})).unwrap();
+    }
+
+    #[tokio::test]
+    async fn greeting_uses_the_runtime_config() {
+        let host = TestHost::new().unwrap();
+        let mut plugin = MyPlugin::default();
+        let context = host
+            .context(plugin.name(), json!({"greeting": "hello"}))
+            .unwrap();
+        plugin.on_load(&context).await.unwrap();
+        let test = TestBot::new().in_group(123);
+        test.call_command(&plugin, "问候", &group_event(123, 456, "问候"))
+            .await
+            .unwrap();
+        test.assert_sent_texts(&["hello"]);
+    }
+
+    #[tokio::test]
+    async fn greeting_uses_declared_defaults_before_loading() {
+        let test = TestBot::new().in_private(456);
+        let message = nuono_plugin_test::private_event(456, "问候");
+        test.call_command(&MyPlugin::default(), "问候", &message)
+            .await
+            .unwrap();
+        test.assert_sent_texts(&["你好呀！"]);
+    }
+
+    #[tokio::test]
+    async fn unrelated_events_continue() {
+        let message = group_event(123, 456, "hello");
+        assert!(matches!(
+            MyPlugin::default()
+                .on_event(&Event::new(&message))
+                .await
+                .unwrap(),
+            PluginResponse::Continue
+        ));
+    }
+}

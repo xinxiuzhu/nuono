@@ -1,0 +1,11 @@
+[alias]
+# 在仓库根目录运行：cargo plugin new my-plugin
+plugin = "run -- plugin"
+adapter = "run -- adapter"
+
+xtask = "run --manifest-path xtask/Cargo.toml --target-dir target --locked --"
+
+[build]
+target-dir = "target"
+
+# 默认让 Cargo 根据可用 CPU 自动并行；如需限制并发，可自行设置环境变量 CARGO_BUILD_JOBS。
