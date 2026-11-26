@@ -399,9 +399,28 @@ pub fn publish(staging: &Path, output: &Path) -> Result<()> {
         rustix::fs::RenameFlags::NOREPLACE,
     )?;
     #[cfg(windows)]
-    fs::rename(staging, output)?;
+    move_without_replace(staging, output)?;
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     anyhow::bail!("当前平台尚未实现发行目录的不可覆盖发布");
+    Ok(())
+}
+
+/// Windows 上 `fs::rename` 会**覆盖**已存在的空目录（与 Unix 语义相反），
+/// 因此改用不携带 `MOVEFILE_REPLACE_EXISTING` 的 `MoveFileExW`，
+/// 目标已存在时返回 `ERROR_ALREADY_EXISTS`，与 `RENAME_NOREPLACE` 对齐。
+#[cfg(windows)]
+fn move_without_replace(staging: &Path, output: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+
+    let staging: Vec<u16> = staging.as_os_str().encode_wide().chain(Some(0)).collect();
+    let output: Vec<u16> = output.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: 两个指针都指向各自存活到调用结束的、以 NUL 结尾的 UTF-16 缓冲区；
+    // 未指定任何 flag 因此不会替换已存在的目标。
+    let moved = unsafe { MoveFileExW(staging.as_ptr(), output.as_ptr(), 0) };
+    if moved == 0 {
+        return Err(std::io::Error::last_os_error()).context("无法发布发行目录");
+    }
     Ok(())
 }
 

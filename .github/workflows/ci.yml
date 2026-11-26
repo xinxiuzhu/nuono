@@ -158,6 +158,42 @@ jobs:
       - run: cargo xtask plugin-templates
       - run: cargo xtask source-startup
 
+  platform:
+    name: Cross-platform check (${{ matrix.os }})
+    # 三端矩阵只做编译与静态检查，不跑测试（测试需要 PostgreSQL 服务与 Unix 语义）。
+    # 目的是保证任何一端的 #[cfg(...)] 分支改动都在另外两端被真正编译验证：
+    # 例如 windows_by_handle 曾让 Windows 分支在 stable 上无法编译，而 CI 只跑 Linux 时无人发现。
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
+          components: clippy
+      - name: Verify selected compiler
+        shell: bash
+        run: |
+          rustc --version
+          cargo --version
+          test "$(rustc --version | cut -d ' ' -f 2)" = "1.100.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: Check workspace
+        run: cargo check --workspace --all-targets --all-features --locked
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      # 本项目的本地开发主机是 x86_64-pc-windows-gnu，而 runner 默认装 msvc 主机工具链。
+      # 补一次 gnu 目标的 check，覆盖 gnu 专有的 cfg 分支（check 不链接最终产物，无需 MinGW gcc）。
+      - name: Add GNU target (Windows)
+        if: runner.os == 'Windows'
+        run: rustup target add x86_64-pc-windows-gnu
+      - name: Check workspace (Windows GNU target)
+        if: runner.os == 'Windows'
+        run: cargo check --workspace --all-targets --all-features --locked --target x86_64-pc-windows-gnu
+
   doc:
     name: Rustdoc (Rust 1.100.0)
     runs-on: ubuntu-24.04

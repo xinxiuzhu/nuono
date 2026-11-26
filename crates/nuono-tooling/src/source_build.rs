@@ -397,6 +397,45 @@ pub fn target_dir(root: &Path) -> Result<PathBuf> {
     })
 }
 
+/// 把路径转换成可以安全传给外部程序的形态。
+///
+/// Windows 上 `fs::canonicalize` 会返回 `\\?\` 逐字（verbatim）前缀，进程内部使用没有问题，
+/// 但 MinGW 的 `ld` 不接受该前缀：它会把对象文件解析成 `\\foo.rcgu.o` 这类损坏的相对路径，
+/// 报 `cannot find \\....rcgu.o`。MSVC 链接器与 `rust-lld` 都能处理，因此只有 windows-gnu
+/// 目标会失败——`cargo run` 不经过 canonicalize 所以看不出问题，发行构建则必然失败。
+///
+/// 该转换只改变路径拼写，不改变指向：`\\?\C:\a` → `C:\a`，`\\?\UNC\s\share\a` → `\\s\share\a`。
+/// 内部比较与身份校验继续使用原路径，只有构造子进程参数时才需要转换。
+#[cfg(windows)]
+pub fn external_path(path: &Path) -> PathBuf {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    const VERBATIM: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    const VERBATIM_UNC: [u16; 4] = [b'U' as u16, b'N' as u16, b'C' as u16, b'\\' as u16];
+
+    // 逐字比较 UTF-16 单元，避免经过有损的 UTF-8 转换破坏无法解码的文件名。
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let Some(remainder) = wide.strip_prefix(&VERBATIM) else {
+        return path.to_path_buf();
+    };
+    let rebuilt = match remainder.strip_prefix(&VERBATIM_UNC) {
+        Some(unc) => {
+            let mut units = vec![b'\\' as u16, b'\\' as u16];
+            units.extend_from_slice(unc);
+            units
+        }
+        None => remainder.to_vec(),
+    };
+    PathBuf::from(OsString::from_wide(&rebuilt))
+}
+
+/// 非 Windows 平台没有逐字前缀，原样返回。
+#[cfg(not(windows))]
+pub fn external_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
 pub fn validate_adapter_manifest(manifest: &toml::Value) -> Result<()> {
     ensure!(
         manifest_kind(manifest)? == SourceKind::Adapter,
@@ -861,11 +900,12 @@ pub fn build_candidate_prepared_locked(
     );
     command
         .args(["build", "--manifest-path"])
-        .arg(project.join("Cargo.toml"))
+        .arg(external_path(&project.join("Cargo.toml")))
         .args(["--bin", "nuono-application-candidate"])
         .args(["--profile", cargo_profile, "--target-dir"])
-        .arg(target)
-        .current_dir(root);
+        .arg(external_path(target))
+        // 同样去掉逐字前缀：CreateProcess 的工作目录参数不接受 `\\?\` 形式。
+        .current_dir(external_path(root));
     if std::env::var_os("NUONO_CARGO_OFFLINE").is_some() {
         command.arg("--offline");
     }
@@ -945,6 +985,43 @@ pub const ICON_FILES: [(&str, &str); 4] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Windows 上 `canonicalize` 会返回 `\\?\` 逐字前缀，MinGW 的 `ld` 不接受它，
+    /// 导致发行构建报 `cannot find \\....rcgu.o`。这里锁定还原规则。
+    #[cfg(windows)]
+    #[test]
+    fn external_path_strips_the_verbatim_prefix() {
+        // 盘符形式：`\\?\C:\a\b` → `C:\a\b`
+        assert_eq!(
+            external_path(Path::new(r"\\?\C:\dir\app")),
+            PathBuf::from(r"C:\dir\app")
+        );
+        // UNC 形式：`\\?\UNC\server\share\a` → `\\server\share\a`
+        assert_eq!(
+            external_path(Path::new(r"\\?\UNC\server\share\app")),
+            PathBuf::from(r"\\server\share\app")
+        );
+        // 没有前缀时原样返回，避免影响常规路径。
+        assert_eq!(
+            external_path(Path::new(r"C:\dir\app")),
+            PathBuf::from(r"C:\dir\app")
+        );
+    }
+
+    /// 转换后的路径必须仍然指向同一位置，否则外部工具会找不到构建目录。
+    #[cfg(windows)]
+    #[test]
+    fn external_path_preserves_the_target_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let canonical = directory.path().canonicalize().unwrap();
+        let converted = external_path(&canonical);
+        assert!(!converted.to_string_lossy().starts_with(r"\\?\"));
+        assert_eq!(
+            converted.canonicalize().unwrap(),
+            canonical,
+            "去掉前缀后必须仍解析到同一目录"
+        );
+    }
 
     fn write_discovery_plugin(root: &Path) -> PathBuf {
         let plugin = root.join("plugins/discovery-probe");

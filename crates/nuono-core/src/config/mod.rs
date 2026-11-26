@@ -1313,6 +1313,9 @@ async fn set_private_file_permissions(path: &Path) -> Result<()> {
                 reason: e.to_string(),
             })?;
     }
+    // Windows 由 NTFS ACL 默认继承控制权限，不额外收紧；显式标记参数已在其他平台使用。
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 

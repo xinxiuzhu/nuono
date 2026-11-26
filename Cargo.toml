@@ -21,7 +21,7 @@ default-members = ["crates/nuono-tooling"]
 exclude = ["adapters/*", "xtask/fixtures/adapter-host"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 authors = ["Nuono Team"]
 rust-version = "1.100.0"

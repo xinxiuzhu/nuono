@@ -3383,7 +3383,7 @@ dependencies = [
 
 [[package]]
 name = "nuono-adapter"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3409,7 +3409,7 @@ dependencies = [
 
 [[package]]
 name = "nuono-ai"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3427,7 +3427,7 @@ dependencies = [
 
 [[package]]
 name = "nuono-ai-provider"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3445,7 +3445,7 @@ dependencies = [
 
 [[package]]
 name = "nuono-app"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3480,7 +3480,7 @@ dependencies = [
 
 [[package]]
 name = "nuono-core"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3531,7 +3531,7 @@ dependencies = [
 
 [[package]]
 name = "nuono-domain"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "chrono",
  "serde",
@@ -3541,7 +3541,7 @@ dependencies = [
 
 [[package]]
 name = "nuono-error"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "regex",
@@ -3553,7 +3553,7 @@ dependencies = [
 
 [[package]]
 name = "nuono-memory"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "chrono",
  "hex",
@@ -3567,7 +3567,7 @@ dependencies = [
 
 [[package]]
 name = "nuono-plugin"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3606,7 +3606,7 @@ dependencies = [
 
 [[package]]
 name = "nuono-plugin-macros"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3615,7 +3615,7 @@ dependencies = [
 
 [[package]]
 name = "nuono-plugin-test"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3629,7 +3629,7 @@ dependencies = [
 
 [[package]]
 name = "nuono-rag"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "hex",
  "nuono-ai",
@@ -3641,7 +3641,7 @@ dependencies = [
 
 [[package]]
 name = "nuono-server"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3695,7 +3695,7 @@ dependencies = [
 
 [[package]]
 name = "nuono-storage"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3725,7 +3725,7 @@ dependencies = [
 
 [[package]]
 name = "nuono-tooling"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3743,6 +3743,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

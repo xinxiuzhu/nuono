@@ -123,6 +123,9 @@ fn sync_directory(path: &Path) -> Result<()> {
     {
         fs::File::open(path)?.sync_all()?;
     }
+    // Windows 没有目录 fsync 的等价语义；显式标记参数已在其他平台使用。
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 pub fn durable_json(path: &Path, value: &impl Serialize) -> Result<()> {

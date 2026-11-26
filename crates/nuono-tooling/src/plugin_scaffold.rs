@@ -234,7 +234,7 @@ impl ScaffoldLock {
             path: path.clone(),
             source,
         })?;
-        let identity = PlatformFileIdentity::from_metadata(&metadata);
+        let identity = PlatformFileIdentity::capture_open(&file, &metadata);
 
         let mut lock = Self {
             path,
@@ -258,7 +258,7 @@ impl Drop for ScaffoldLock {
         let Ok(metadata) = fs::symlink_metadata(&self.path) else {
             return;
         };
-        if metadata.file_type().is_file() && self.identity.safe_to_unlink(&metadata) {
+        if metadata.file_type().is_file() && self.identity.safe_to_unlink(&self.path, &metadata) {
             let _ = fs::remove_file(&self.path);
         }
     }
@@ -286,7 +286,7 @@ impl PluginsRootIdentity {
 
         Ok(Self {
             canonical_path,
-            platform_identity: PlatformFileIdentity::from_metadata(&metadata),
+            platform_identity: PlatformFileIdentity::capture(plugins_root, &metadata),
         })
     }
 
@@ -302,7 +302,9 @@ impl PluginsRootIdentity {
                 source,
             })?;
 
-        if canonical_path == self.canonical_path && self.platform_identity.matches(&metadata) {
+        if canonical_path == self.canonical_path
+            && self.platform_identity.matches(plugins_root, &metadata)
+        {
             Ok(())
         } else {
             Err(ScaffoldError::InvalidPluginsRoot {
@@ -321,6 +323,16 @@ struct PlatformFileIdentity {
 
 #[cfg(unix)]
 impl PlatformFileIdentity {
+    /// 路径身份：`symlink_metadata` 得到的元数据已对应打开时的对象。
+    fn capture(_path: &Path, metadata: &fs::Metadata) -> Self {
+        Self::from_metadata(metadata)
+    }
+
+    /// 句柄身份：对已打开的文件取元数据，避免重新解析路径带来的竞态。
+    fn capture_open(_file: &fs::File, metadata: &fs::Metadata) -> Self {
+        Self::from_metadata(metadata)
+    }
+
     fn from_metadata(metadata: &fs::Metadata) -> Self {
         use std::os::unix::fs::MetadataExt;
 
@@ -330,12 +342,12 @@ impl PlatformFileIdentity {
         }
     }
 
-    fn matches(&self, metadata: &fs::Metadata) -> bool {
-        *self == Self::from_metadata(metadata)
+    fn matches(&self, path: &Path, metadata: &fs::Metadata) -> bool {
+        *self == Self::capture(path, metadata)
     }
 
-    fn safe_to_unlink(&self, metadata: &fs::Metadata) -> bool {
-        self.matches(metadata)
+    fn safe_to_unlink(&self, path: &Path, metadata: &fs::Metadata) -> bool {
+        self.matches(path, metadata)
     }
 }
 
@@ -348,22 +360,65 @@ struct PlatformFileIdentity {
 
 #[cfg(windows)]
 impl PlatformFileIdentity {
-    fn from_metadata(metadata: &fs::Metadata) -> Self {
-        use std::os::windows::fs::MetadataExt;
+    /// 路径身份：重新打开路径本身（不跟随重解析点）后查询句柄信息。
+    ///
+    /// `MetadataExt::volume_serial_number` / `MetadataExt::file_index` 在 stable 上仍是
+    /// nightly-only 的 `windows_by_handle`，因此改用 `GetFileInformationByHandle`。
+    fn capture(path: &Path, metadata: &fs::Metadata) -> Self {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        // 目录必须以 FILE_FLAG_BACKUP_SEMANTICS 打开；FILE_FLAG_OPEN_REPARSE_POINT 保证拿到
+        // 的是链接或联接自身，与 `symlink_metadata` 的语义一致。
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+        let opened = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path);
+        // 打不开或查询失败时返回未知身份，让 `matches` 一律判定为不匹配（保守拒绝）。
+        opened.map_or_else(
+            |_| Self::unknown(),
+            |file| Self::capture_open(&file, metadata),
+        )
+    }
+
+    /// 句柄身份：直接查询已打开句柄，不重新解析路径。
+    fn capture_open(file: &fs::File, _metadata: &fs::Metadata) -> Self {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+        };
+
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: `file` 在调用期间保持打开，句柄有效；`info` 是独占且大小匹配的可写结构体。
+        let succeeded = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
+        if succeeded == 0 {
+            return Self::unknown();
+        }
 
         Self {
-            volume_serial_number: metadata.volume_serial_number(),
-            file_index: metadata.file_index(),
+            volume_serial_number: Some(info.dwVolumeSerialNumber),
+            file_index: Some(
+                (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+            ),
         }
     }
 
-    fn matches(&self, metadata: &fs::Metadata) -> bool {
-        let current = Self::from_metadata(metadata);
+    fn unknown() -> Self {
+        Self {
+            volume_serial_number: None,
+            file_index: None,
+        }
+    }
+
+    fn matches(&self, path: &Path, metadata: &fs::Metadata) -> bool {
+        let current = Self::capture(path, metadata);
         self.volume_serial_number.is_some() && self.file_index.is_some() && *self == current
     }
 
-    fn safe_to_unlink(&self, metadata: &fs::Metadata) -> bool {
-        self.matches(metadata)
+    fn safe_to_unlink(&self, path: &Path, metadata: &fs::Metadata) -> bool {
+        self.matches(path, metadata)
     }
 }
 
@@ -375,17 +430,25 @@ struct PlatformFileIdentity {
 
 #[cfg(not(any(unix, windows)))]
 impl PlatformFileIdentity {
+    fn capture(_path: &Path, metadata: &fs::Metadata) -> Self {
+        Self::from_metadata(metadata)
+    }
+
+    fn capture_open(_file: &fs::File, metadata: &fs::Metadata) -> Self {
+        Self::from_metadata(metadata)
+    }
+
     fn from_metadata(metadata: &fs::Metadata) -> Self {
         Self {
             created: metadata.created().ok(),
         }
     }
 
-    fn matches(&self, metadata: &fs::Metadata) -> bool {
-        self.created.is_some() && *self == Self::from_metadata(metadata)
+    fn matches(&self, path: &Path, metadata: &fs::Metadata) -> bool {
+        self.created.is_some() && *self == Self::capture(path, metadata)
     }
 
-    fn safe_to_unlink(&self, _metadata: &fs::Metadata) -> bool {
+    fn safe_to_unlink(&self, _path: &Path, _metadata: &fs::Metadata) -> bool {
         false
     }
 }

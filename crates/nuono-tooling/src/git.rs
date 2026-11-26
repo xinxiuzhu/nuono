@@ -108,6 +108,11 @@ async fn read_command(command: Command, timeout: Duration) -> Result<std::proces
         .spawn()
         .map_err(|_| "无法启动 Git，请检查是否已安装".to_string())?;
     let id = child.id();
+    // Windows 没有进程组；把子进程放进作业对象后，超时可由 Job 连带回收其孙进程。
+    // 必须紧接 spawn 执行：作业内的进程再派生的子进程会自动继承成员身份，
+    // 越早加入，能逃逸到作业之外的后代就越少。
+    #[cfg(windows)]
+    let job = id.and_then(|id| job::ProcessJob::containing(id).ok());
     let stdout = child.stdout.take().ok_or("无法读取 Git 输出")?;
     let stderr = child.stderr.take().ok_or("无法读取 Git 错误")?;
     let result = tokio::time::timeout_at(deadline, async {
@@ -133,13 +138,94 @@ async fn read_command(command: Command, timeout: Duration) -> Result<std::proces
     {
         let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    if let Some(job) = &job {
+        // 先终止整个作业，孙进程随之退出并释放继承来的管道写端；
+        // 否则运行时销毁时会等待这些残留的异步读操作完成。
+        job.terminate();
+    }
+    #[cfg(not(any(unix, windows)))]
     let _ = id;
     let _ = child.start_kill();
     // 超时后上方读取管道的 Future 已被丢弃并关闭了读端句柄，
     // 即便有孙进程脱离了进程组，清理流程也绝不会阻塞等待其管道 EOF。
     let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
     Err(error)
+}
+
+/// Windows 作业对象：Unix 侧用进程组保证「超时杀掉整棵子孙进程树」，Windows 没有
+/// 等价物，只能靠 Job Object。不这样做时，孙进程会继续持有继承来的 stdout/stderr
+/// 写端，导致超时后的运行时销毁阻塞到它自行退出为止。
+#[cfg(windows)]
+mod job {
+    use std::ffi::c_void;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    };
+
+    pub struct ProcessJob(HANDLE);
+
+    impl ProcessJob {
+        /// 创建一个配置为「句柄关闭即终止全部成员」的作业，并把 `pid` 加入其中。
+        pub fn containing(pid: u32) -> Result<Self, ()> {
+            // SAFETY: 传入空安全属性与匿名作业名，只要求返回一个新句柄；失败时返回空句柄。
+            let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+                return Err(());
+            }
+            let job = Self(handle);
+
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            // SAFETY: 结构体是 `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` 的完整可读副本，
+            // 传入的长度与其大小一致，且句柄由上方创建并在此调用期间有效。
+            let configured = unsafe {
+                SetInformationJobObject(
+                    job.0,
+                    JobObjectExtendedLimitInformation,
+                    std::ptr::from_ref(&limits).cast::<c_void>(),
+                    u32::try_from(std::mem::size_of_val(&limits)).map_err(|_| ())?,
+                )
+            };
+            if configured == 0 {
+                return Err(());
+            }
+
+            // SAFETY: 以最小权限打开目标进程，句柄在加入作业后立即关闭。
+            let process = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
+            if process.is_null() || process == INVALID_HANDLE_VALUE {
+                return Err(());
+            }
+            // SAFETY: 两个句柄均有效：`job.0` 由 `job` 持有，`process` 在下方关闭。
+            let assigned = unsafe { AssignProcessToJobObject(job.0, process) };
+            // SAFETY: `process` 是本进程用 `OpenProcess` 获得的、尚未关闭的句柄。
+            unsafe { CloseHandle(process) };
+            if assigned == 0 {
+                return Err(());
+            }
+            Ok(job)
+        }
+
+        /// 立即终止作业内全部进程（含递归成员）。
+        pub fn terminate(&self) {
+            // SAFETY: 句柄由 `self` 持有且有效；退出码只用于标记被终止的进程。
+            unsafe { TerminateJobObject(self.0, 1) };
+        }
+    }
+
+    impl Drop for ProcessJob {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` 是本类型独占的、由 `CreateJobObjectW` 返回的句柄，
+            // 且 `Drop` 只会执行一次。
+            unsafe { CloseHandle(self.0) };
+        }
+    }
 }
 
 async fn drain(mut stream: impl tokio::io::AsyncRead + Unpin) -> Result<Vec<u8>, String> {

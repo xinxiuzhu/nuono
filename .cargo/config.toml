@@ -9,3 +9,12 @@ xtask = "run --manifest-path xtask/Cargo.toml --target-dir target --locked --"
 target-dir = "target"
 
 # 默认让 Cargo 根据可用 CPU 自动并行；如需限制并发，可自行设置环境变量 CARGO_BUILD_JOBS。
+
+[target.x86_64-pc-windows-gnu]
+# rustc 默认优先使用自带 self-contained 的 MinGW 库，其中 libpthread.a 是精简版，
+# 不含 nanosleep64。aws-lc-sys（经 reqwest → rustls → aws-lc-rs 引入）在 MingW
+# x86_64 上用 winpthreads 的 nanosleep 做退避，链接时因此报
+# `undefined reference to nanosleep64`。
+# 关闭 self-contained 后全部 CRT 与库都取自本机 MinGW-w64（完整版 libpthread.a
+# 含该符号）。Windows 构建本就需要完整 MinGW（binutils、C 编译器），此设置与之一致。
+rustflags = ["-C", "link-self-contained=no"]

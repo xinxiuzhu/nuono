@@ -23,7 +23,7 @@
   "description": "一句话说明功能",
   "author": "alice",
   "license": "Apache-2.0",
-  "nuono_version": "0.0.1",
+  "nuono_version": "0.0.2",
   "repo": "https://github.com/alice/example.git",
   "commit": "0123456789abcdef0123456789abcdef01234567"
 }

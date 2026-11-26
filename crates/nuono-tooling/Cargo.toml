@@ -32,6 +32,17 @@ tokio = { workspace = true, features = ["rt-multi-thread", "signal", "process", 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.5", features = ["fs", "process"] }
 
+[target.'cfg(windows)'.dependencies]
+# stable 尚未稳定 `MetadataExt::volume_serial_number` / `file_index`，改用句柄信息查询文件身份；
+# Job Object 用于在超时时回收 Git 的整棵子孙进程树（Windows 没有进程组）。
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 tempfile = "3"
 
