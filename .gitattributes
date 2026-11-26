@@ -1,0 +1,8 @@
+# 统一使用 LF，避免 Windows 检出时按 core.autocrlf 转换成 CRLF。
+# 仓库内没有依赖 CRLF 的脚本（无 .bat/.cmd/.ps1），因此可以全局统一。
+* text=auto eol=lf
+
+# 前端构建产物必须按字节原样保存：index.html 内嵌了各资源的 SRI 哈希
+# （integrity="sha384-..."），任何行尾转换都会改变文件字节，导致哈希不匹配、
+# 浏览器拒绝执行脚本与样式，最终页面空白。
+nuono-hub/dist/** -text
