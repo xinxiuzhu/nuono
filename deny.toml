@@ -9,6 +9,11 @@ all-features = true
 version = 2
 yanked = "deny"
 ignore = [
+    # sqlx-sqlite 0.9 固定依赖 libsqlite3-sys 0.37（修复在 0.39）；本地构造不匹配 WAL 文件对的攻击面不适用于宿主自管库。
+    "RUSTSEC-2026-0459",
+    # 上游 sea-orm / sqlx / croner 与工作区时间模型仍依赖 chrono 生态，暂保留直至整体迁移。
+    "RUSTSEC-2026-0543",
+    "RUSTSEC-2026-0555",
 ]
 
 [licenses]
@@ -26,6 +31,8 @@ allow = [
     "GPL-3.0-only",
     "ISC",
     "MIT",
+    # borrow-or-share 使用的 MIT No Attribution 协议（OSI 认证）
+    "MIT-0",
     "MPL-2.0",
     "Unicode-3.0",
     "Unicode-DFS-2016",

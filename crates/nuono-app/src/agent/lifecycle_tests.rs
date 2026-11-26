@@ -437,9 +437,12 @@ async fn explicit_cancel_then_unpolled_drop_closes_queued_and_paused_descendants
 async fn parent_timeout_cancels_children_before_a_slow_terminal_checkpoint() {
     let (runtime, store, model) = runtime(1, 1, Mode::Delegation);
     let runtime = runtime.with_run_limits(super::super::run::RunLimits {
-        timeout: Duration::from_millis(50),
+        timeout: Duration::from_millis(200),
         ..Default::default()
     });
+    // 先暂缓父任务首轮模型返回，让子任务的独立超时截止时间明显晚于父任务，
+    // 避免并发负载下子任务自身超时与父任务取消产生毫秒级竞态。
+    model.hold_all.store(true, Ordering::SeqCst);
     let gate = Arc::new(Semaphore::new(0));
     *store.terminal_gate.lock().unwrap() = Some(gate.clone());
     let parent = tokio::spawn(
@@ -449,6 +452,10 @@ async fn parent_timeout_cancels_children_before_a_slow_terminal_checkpoint() {
             .unwrap()
             .unwrap(),
     );
+    until(|| model.calls.load(Ordering::SeqCst) == 1).await;
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    model.hold_all.store(false, Ordering::SeqCst);
+    model.gate.add_permits(1);
     until(|| model.calls.load(Ordering::SeqCst) == 2).await;
     let id = store
         .runs

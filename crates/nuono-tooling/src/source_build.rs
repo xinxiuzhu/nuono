@@ -257,12 +257,11 @@ pub fn shutdown_operations() {
 }
 fn stop_child(child: &mut std::process::Child) {
     #[cfg(unix)]
+    if let Some(group) = i32::try_from(child.id())
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
     {
-        let _ = Command::new("kill")
-            .args(["-KILL", &format!("-{}", child.id())])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
     }
     let _ = child.kill();
     let _ = child.wait();
@@ -397,37 +396,51 @@ pub fn target_dir(root: &Path) -> Result<PathBuf> {
     })
 }
 
-/// 把路径转换成可以安全传给外部程序的形态。
+/// 仅剥离盘符（`\\?\C:\...`）与 UNC（`\\?\UNC\...`）形式的逐字前缀，
+/// 保留 `\\?\Volume{...}\...` 等设备/卷 GUID 路径以免破坏为相对路径。
+#[cfg(any(windows, test))]
+fn strip_verbatim_wide(wide: &[u16]) -> Option<Vec<u16>> {
+    const VERBATIM: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+
+    let remainder = wide.strip_prefix(&VERBATIM)?;
+    let is_drive = remainder.len() >= 3
+        && u8::try_from(remainder[0]).is_ok_and(|b| b.is_ascii_alphabetic())
+        && remainder[1] == b':' as u16
+        && remainder[2] == b'\\' as u16;
+    if is_drive {
+        return Some(remainder.to_vec());
+    }
+    let is_unc = remainder.len() >= 4
+        && remainder[0..4]
+            .iter()
+            .zip(b"UNC\\")
+            .all(|(&unit, &expected)| {
+                u8::try_from(unit).is_ok_and(|b| b.eq_ignore_ascii_case(&expected))
+            });
+    if is_unc {
+        let mut units = Vec::with_capacity(remainder.len() - 2);
+        units.extend_from_slice(&[b'\\' as u16, b'\\' as u16]);
+        units.extend_from_slice(&remainder[4..]);
+        return Some(units);
+    }
+    None
+}
+
+/// 把路径转换成可以安全传给外部工具链与生成的 `Cargo.toml` 的形态。
 ///
-/// Windows 上 `fs::canonicalize` 会返回 `\\?\` 逐字（verbatim）前缀，进程内部使用没有问题，
-/// 但 MinGW 的 `ld` 不接受该前缀：它会把对象文件解析成 `\\foo.rcgu.o` 这类损坏的相对路径，
-/// 报 `cannot find \\....rcgu.o`。MSVC 链接器与 `rust-lld` 都能处理，因此只有 windows-gnu
-/// 目标会失败——`cargo run` 不经过 canonicalize 所以看不出问题，发行构建则必然失败。
-///
-/// 该转换只改变路径拼写，不改变指向：`\\?\C:\a` → `C:\a`，`\\?\UNC\s\share\a` → `\\s\share\a`。
-/// 内部比较与身份校验继续使用原路径，只有构造子进程参数时才需要转换。
+/// Windows 上 `fs::canonicalize` 返回 `\\?\` 逐字前缀，MinGW `ld` 与部分外部命令无法解析该形式。
+/// 仅在构造子进程参数与外部清单路径时去掉盘符/UNC 逐字前缀，内部比较与身份校验继续使用原路径。
 #[cfg(windows)]
 pub fn external_path(path: &Path) -> PathBuf {
     use std::ffi::OsString;
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
-    const VERBATIM: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
-    const VERBATIM_UNC: [u16; 4] = [b'U' as u16, b'N' as u16, b'C' as u16, b'\\' as u16];
-
     // 逐字比较 UTF-16 单元，避免经过有损的 UTF-8 转换破坏无法解码的文件名。
     let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-    let Some(remainder) = wide.strip_prefix(&VERBATIM) else {
-        return path.to_path_buf();
-    };
-    let rebuilt = match remainder.strip_prefix(&VERBATIM_UNC) {
-        Some(unc) => {
-            let mut units = vec![b'\\' as u16, b'\\' as u16];
-            units.extend_from_slice(unc);
-            units
-        }
-        None => remainder.to_vec(),
-    };
-    PathBuf::from(OsString::from_wide(&rebuilt))
+    match strip_verbatim_wide(&wide) {
+        Some(rebuilt) => PathBuf::from(OsString::from_wide(&rebuilt)),
+        None => path.to_path_buf(),
+    }
 }
 
 /// 非 Windows 平台没有逐字前缀，原样返回。
@@ -682,7 +695,7 @@ fn generate_with_sources(
     let quote = |value: &str| serde_json::to_string(value);
     let mut manifest = format!(
         "[package]\nname=\"nuono-application\"\nversion=\"0.0.1\"\nedition=\"2024\"\npublish=false\n[workspace]\nresolver=\"3\"\n[dependencies]\nnuono-server={{path={}}}\n",
-        quote(&root.join("crates/nuono-server").to_string_lossy())?
+        quote(&external_path(&root.join("crates/nuono-server")).to_string_lossy())?
     );
     let mut factories = Vec::new();
     let mut adapters = Vec::new();
@@ -692,7 +705,7 @@ fn generate_with_sources(
         manifest.push_str(&format!(
             "plugin_{i}={{package={},path={}}}\n",
             quote(name)?,
-            quote(&path.to_string_lossy())?
+            quote(&external_path(path).to_string_lossy())?
         ));
         let id = path
             .file_name()
@@ -720,7 +733,7 @@ fn generate_with_sources(
         for name in SHARED_SOURCE_CRATES {
             manifest.push_str(&format!(
                 "{name}={{path={}}}\n",
-                quote(&root.join("crates").join(name).to_string_lossy())?
+                quote(&external_path(&root.join("crates").join(name)).to_string_lossy())?
             ));
         }
     }
@@ -986,29 +999,55 @@ pub const ICON_FILES: [(&str, &str); 4] = [
 mod tests {
     use super::*;
 
-    /// Windows 上 `canonicalize` 会返回 `\\?\` 逐字前缀，MinGW 的 `ld` 不接受它，
-    /// 导致发行构建报 `cannot find \\....rcgu.o`。这里锁定还原规则。
+    #[test]
+    fn strip_verbatim_wide_handles_drive_unc_and_device_paths() {
+        let to_utf16 = |text: &str| -> Vec<u16> { text.encode_utf16().collect() };
+        let from_utf16 = |units: Vec<u16>| String::from_utf16(&units).unwrap();
+
+        assert_eq!(
+            strip_verbatim_wide(&to_utf16(r"\\?\C:\dir\app")).map(from_utf16),
+            Some(r"C:\dir\app".into())
+        );
+        assert_eq!(
+            strip_verbatim_wide(&to_utf16(r"\\?\UNC\server\share\app")).map(from_utf16),
+            Some(r"\\server\share\app".into())
+        );
+        assert_eq!(
+            strip_verbatim_wide(&to_utf16(r"\\?\unc\server\share\app")).map(from_utf16),
+            Some(r"\\server\share\app".into())
+        );
+        assert_eq!(
+            strip_verbatim_wide(&to_utf16(
+                r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\dir"
+            )),
+            None
+        );
+        assert_eq!(strip_verbatim_wide(&to_utf16(r"C:\dir\app")), None);
+    }
+
     #[cfg(windows)]
     #[test]
     fn external_path_strips_the_verbatim_prefix() {
-        // 盘符形式：`\\?\C:\a\b` → `C:\a\b`
         assert_eq!(
             external_path(Path::new(r"\\?\C:\dir\app")),
             PathBuf::from(r"C:\dir\app")
         );
-        // UNC 形式：`\\?\UNC\server\share\a` → `\\server\share\a`
         assert_eq!(
             external_path(Path::new(r"\\?\UNC\server\share\app")),
             PathBuf::from(r"\\server\share\app")
         );
-        // 没有前缀时原样返回，避免影响常规路径。
+        assert_eq!(
+            external_path(Path::new(
+                r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\dir"
+            )),
+            PathBuf::from(r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\dir")
+        );
         assert_eq!(
             external_path(Path::new(r"C:\dir\app")),
             PathBuf::from(r"C:\dir\app")
         );
     }
 
-    /// 转换后的路径必须仍然指向同一位置，否则外部工具会找不到构建目录。
     #[cfg(windows)]
     #[test]
     fn external_path_preserves_the_target_directory() {

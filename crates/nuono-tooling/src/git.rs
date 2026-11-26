@@ -55,7 +55,7 @@ fn execute(
             "gc.auto=0",
             "-C",
         ])
-        .arg(target)
+        .arg(source_build::external_path(target))
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -107,12 +107,13 @@ async fn read_command(command: Command, timeout: Duration) -> Result<std::proces
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| "无法启动 Git，请检查是否已安装".to_string())?;
+    #[cfg(unix)]
     let id = child.id();
     // Windows 没有进程组；把子进程放进作业对象后，超时可由 Job 连带回收其孙进程。
     // 必须紧接 spawn 执行：作业内的进程再派生的子进程会自动继承成员身份，
     // 越早加入，能逃逸到作业之外的后代就越少。
     #[cfg(windows)]
-    let job = id.and_then(|id| job::ProcessJob::containing(id).ok());
+    let job = job::ProcessJob::attach(&child);
     let stdout = child.stdout.take().ok_or("无法读取 Git 输出")?;
     let stderr = child.stderr.take().ok_or("无法读取 Git 错误")?;
     let result = tokio::time::timeout_at(deadline, async {
@@ -144,8 +145,6 @@ async fn read_command(command: Command, timeout: Duration) -> Result<std::proces
         // 否则运行时销毁时会等待这些残留的异步读操作完成。
         job.terminate();
     }
-    #[cfg(not(any(unix, windows)))]
-    let _ = id;
     let _ = child.start_kill();
     // 超时后上方读取管道的 Future 已被丢弃并关闭了读端句柄，
     // 即便有孙进程脱离了进程组，清理流程也绝不会阻塞等待其管道 EOF。
@@ -165,51 +164,47 @@ mod job {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
         SetInformationJobObject, TerminateJobObject,
     };
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
-    };
 
     pub struct ProcessJob(HANDLE);
 
     impl ProcessJob {
-        /// 创建一个配置为「句柄关闭即终止全部成员」的作业，并把 `pid` 加入其中。
-        pub fn containing(pid: u32) -> Result<Self, ()> {
+        /// 创建一个配置为「句柄关闭即终止全部成员」的作业，并直接把已启动的子进程句柄加入其中。
+        pub fn attach(child: &tokio::process::Child) -> Option<Self> {
+            let process = child.raw_handle()?;
+            if process.is_null() || process == INVALID_HANDLE_VALUE {
+                return None;
+            }
             // SAFETY: 传入空安全属性与匿名作业名，只要求返回一个新句柄；失败时返回空句柄。
             let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
             if handle.is_null() || handle == INVALID_HANDLE_VALUE {
-                return Err(());
+                return None;
             }
             let job = Self(handle);
 
             let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            // SAFETY: 结构体是 `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` 的完整可读副本，
-            // 传入的长度与其大小一致，且句柄由上方创建并在此调用期间有效。
+            let limits_size = u32::try_from(std::mem::size_of_val(&limits)).ok()?;
+            // SAFETY: `limits` 是完整的 `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` 结构体，
+            // 传入的长度与其大小一致，且 `job.0` 由上方创建并在此调用期间有效。
             let configured = unsafe {
                 SetInformationJobObject(
                     job.0,
                     JobObjectExtendedLimitInformation,
                     std::ptr::from_ref(&limits).cast::<c_void>(),
-                    u32::try_from(std::mem::size_of_val(&limits)).map_err(|_| ())?,
+                    limits_size,
                 )
             };
             if configured == 0 {
-                return Err(());
+                return None;
             }
 
-            // SAFETY: 以最小权限打开目标进程，句柄在加入作业后立即关闭。
-            let process = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
-            if process.is_null() || process == INVALID_HANDLE_VALUE {
-                return Err(());
-            }
-            // SAFETY: 两个句柄均有效：`job.0` 由 `job` 持有，`process` 在下方关闭。
+            // SAFETY: `job.0` 由 `job` 持有，`process` 借自仍在存活的 `child`，
+            // 在整个调用期间保持有效，避免了按 PID 重新 `OpenProcess` 的竞态。
             let assigned = unsafe { AssignProcessToJobObject(job.0, process) };
-            // SAFETY: `process` 是本进程用 `OpenProcess` 获得的、尚未关闭的句柄。
-            unsafe { CloseHandle(process) };
             if assigned == 0 {
-                return Err(());
+                return None;
             }
-            Ok(job)
+            Some(job)
         }
 
         /// 立即终止作业内全部进程（含递归成员）。

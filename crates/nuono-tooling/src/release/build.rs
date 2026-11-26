@@ -178,8 +178,8 @@ fn audit_local_dependencies(
             "1",
             "--manifest-path",
         ])
-        .arg(project.join("Cargo.toml"))
-        .current_dir(root)
+        .arg(source_build::external_path(&project.join("Cargo.toml")))
+        .current_dir(source_build::external_path(root))
         .output()?;
     ensure!(
         output.status.success(),
@@ -413,8 +413,14 @@ fn move_without_replace(staging: &Path, output: &Path) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
 
-    let staging: Vec<u16> = staging.as_os_str().encode_wide().chain(Some(0)).collect();
-    let output: Vec<u16> = output.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to_wide_nul = |path: &Path| -> Result<Vec<u16>> {
+        let mut units: Vec<u16> = path.as_os_str().encode_wide().collect();
+        ensure!(!units.contains(&0), "发行路径不能包含空字符");
+        units.push(0);
+        Ok(units)
+    };
+    let staging = to_wide_nul(staging)?;
+    let output = to_wide_nul(output)?;
     // SAFETY: 两个指针都指向各自存活到调用结束的、以 NUL 结尾的 UTF-16 缓冲区；
     // 未指定任何 flag 因此不会替换已存在的目标。
     let moved = unsafe { MoveFileExW(staging.as_ptr(), output.as_ptr(), 0) };

@@ -160,9 +160,7 @@ jobs:
 
   platform:
     name: Cross-platform check (${{ matrix.os }})
-    # 三端矩阵只做编译与静态检查，不跑测试（测试需要 PostgreSQL 服务与 Unix 语义）。
-    # 目的是保证任何一端的 #[cfg(...)] 分支改动都在另外两端被真正编译验证：
-    # 例如 windows_by_handle 曾让 Windows 分支在 stable 上无法编译，而 CI 只跑 Linux 时无人发现。
+    # 三端矩阵只做编译与静态检查，覆盖各平台的 #[cfg(...)] 分支。
     strategy:
       fail-fast: false
       matrix:
@@ -185,14 +183,14 @@ jobs:
         run: cargo check --workspace --all-targets --all-features --locked
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      # 本项目的本地开发主机是 x86_64-pc-windows-gnu，而 runner 默认装 msvc 主机工具链。
-      # 补一次 gnu 目标的 check，覆盖 gnu 专有的 cfg 分支（check 不链接最终产物，无需 MinGW gcc）。
+      # Windows runner 默认使用 msvc 工具链，补跑一次 windows-gnu 目标检查以覆盖 GNU 分支。
+      # 不启用 --all-features：可选 obscura 依赖的 v8 不提供 windows-gnu 预编译产物。
       - name: Add GNU target (Windows)
         if: runner.os == 'Windows'
         run: rustup target add x86_64-pc-windows-gnu
       - name: Check workspace (Windows GNU target)
         if: runner.os == 'Windows'
-        run: cargo check --workspace --all-targets --all-features --locked --target x86_64-pc-windows-gnu
+        run: cargo check --workspace --all-targets --locked --target x86_64-pc-windows-gnu
 
   doc:
     name: Rustdoc (Rust 1.100.0)

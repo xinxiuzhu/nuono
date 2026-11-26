@@ -291,8 +291,6 @@ mod tests {
         fs::create_dir_all(stale.parent().unwrap()).unwrap();
         fs::write(&stale, b"stale executable must not be selected").unwrap();
         let mut command = Command::new("cargo");
-        // 与生产路径一致：`root` 已经过 canonicalize，Windows 上会带 `\\?\` 前缀，
-        // 传给外部进程前必须经 `external_path` 还原，否则 windows-gnu 的 ld 无法解析。
         command
             .args(["build", "--offline", "--manifest-path"])
             .arg(crate::source_build::external_path(&manifest))
@@ -301,8 +299,6 @@ mod tests {
             .env("CARGO_BUILD_TARGET", host)
             .current_dir(crate::source_build::external_path(&root));
         let executable = run(&mut command, &manifest, None).unwrap();
-        // Cargo 回报的路径与传入的 `--target-dir` 拼写一致，因此期望值也按外部形态构造；
-        // 两者指向同一个目录，`is_file` 类断言仍然有效。
         let expected = crate::source_build::external_path(&target)
             .join(host)
             .join("debug")

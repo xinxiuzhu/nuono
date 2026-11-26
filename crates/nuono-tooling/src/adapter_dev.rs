@@ -65,9 +65,9 @@ pub fn run(action: CargoAction, path: &Path, config: Option<&Path>) -> Result<i3
     }
     let status = command
         .arg("--manifest-path")
-        .arg(manifest)
+        .arg(crate::source_build::external_path(&manifest))
         .arg("--target-dir")
-        .arg(target)
+        .arg(crate::source_build::external_path(&target))
         .status()?;
     Ok(status.code().unwrap_or(1))
 }

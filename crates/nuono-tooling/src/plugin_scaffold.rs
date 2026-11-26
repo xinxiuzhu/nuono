@@ -360,20 +360,20 @@ struct PlatformFileIdentity {
 
 #[cfg(windows)]
 impl PlatformFileIdentity {
-    /// 路径身份：重新打开路径本身（不跟随重解析点）后查询句柄信息。
+    /// 路径身份：仅以元数据查询权限重新打开路径本身（不跟随重解析点）后读取句柄信息。
     ///
     /// `MetadataExt::volume_serial_number` / `MetadataExt::file_index` 在 stable 上仍是
     /// nightly-only 的 `windows_by_handle`，因此改用 `GetFileInformationByHandle`。
     fn capture(path: &Path, metadata: &fs::Metadata) -> Self {
         use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        };
 
-        // 目录必须以 FILE_FLAG_BACKUP_SEMANTICS 打开；FILE_FLAG_OPEN_REPARSE_POINT 保证拿到
-        // 的是链接或联接自身，与 `symlink_metadata` 的语义一致。
-        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-
+        // 目录必须带 FILE_FLAG_BACKUP_SEMANTICS 才能打开；FILE_FLAG_OPEN_REPARSE_POINT
+        // 保证拿到的是链接或联接自身，与 `symlink_metadata` 对齐；access_mode(0) 仅查询元数据。
         let opened = fs::OpenOptions::new()
-            .read(true)
+            .access_mode(0)
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
             .open(path);
         // 打不开或查询失败时返回未知身份，让 `matches` 一律判定为不匹配（保守拒绝）。
@@ -392,7 +392,7 @@ impl PlatformFileIdentity {
 
         let mut info = BY_HANDLE_FILE_INFORMATION::default();
         // SAFETY: `file` 在调用期间保持打开，句柄有效；`info` 是独占且大小匹配的可写结构体。
-        let succeeded = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
+        let succeeded = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) };
         if succeeded == 0 {
             return Self::unknown();
         }

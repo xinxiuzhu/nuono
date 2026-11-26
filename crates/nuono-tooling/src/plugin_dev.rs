@@ -96,10 +96,11 @@ pub fn validate_manifest(content: &toml::Value) -> Result<()> {
 }
 
 fn check_toolchain(directory: &Path) -> Result<()> {
+    let working_dir = crate::source_build::external_path(directory);
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
     let output = Command::new(rustc)
         .arg("-vV")
-        .current_dir(directory)
+        .current_dir(&working_dir)
         .output()
         .context("无法运行 rustc；请安装 Rust 并确保 PATH 正确")?;
     ensure!(
@@ -116,7 +117,7 @@ fn check_toolchain(directory: &Path) -> Result<()> {
     );
     let cargo = Command::new("cargo")
         .arg("--version")
-        .current_dir(directory)
+        .current_dir(&working_dir)
         .output()
         .context("无法运行 cargo；请检查 PATH")?;
     ensure!(
@@ -254,10 +255,10 @@ pub fn run(action: CargoAction, path: &Path, config_path: Option<&Path>) -> Resu
     // 插件开发命令不加 `--locked`，允许开发者在修改依赖后由 Cargo 自动更新插件的 Cargo.lock。
     let status = command
         .arg("--manifest-path")
-        .arg(&project.manifest)
+        .arg(crate::source_build::external_path(&project.manifest))
         .arg("--target-dir")
-        .arg(&target)
-        .current_dir(&project.directory)
+        .arg(crate::source_build::external_path(&target))
+        .current_dir(crate::source_build::external_path(&project.directory))
         .status()
         .context("无法运行 Cargo 插件命令")?;
     if status.success() {
