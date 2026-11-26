@@ -300,7 +300,7 @@ fn check_runtime(
         .arg("--port")
         .arg(port.to_string())
         .env("CARGO_NET_OFFLINE", "true")
-        .env("RUST_LOG", "info")
+        .env("RUST_LOG", "info,nuono::startup=debug")
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log));
     if !source {

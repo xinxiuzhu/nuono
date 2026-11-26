@@ -342,9 +342,11 @@ async fn sqlite_postgres_sqlite_preserves_unbind_merge_grants_and_reinstallation
             .status,
         "merged"
     );
+    // 解绑平台身份会在 nuono_users 中新建一条 shadow 占位用户（占用 blue.id + 1），
+    // 回迁 SQLite 后新注册账号的自增 ID 应从 blue.id + 2 继续递增。
     assert_eq!(
         account(&returned, "transfer-red", "user").await.id,
-        blue.id + 1
+        blue.id + 2
     );
     let row = returned
         .orm()
