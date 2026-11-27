@@ -46,12 +46,6 @@ async fn settings(State(state): State<AppState>) -> crate::api::ApiReply<StoreSe
     let cfg = state.config.snapshot().await;
     ApiResponse::ok(StoreSettingsBody {
         index_url: cfg.plugin_store.index_url.clone().unwrap_or_default(),
-        signing_public_key: cfg
-            .plugin_store
-            .signing_public_key
-            .clone()
-            .unwrap_or_default(),
-        require_signature: cfg.plugin_store.require_signature,
     })
 }
 

@@ -1,8 +1,7 @@
 //! 已安装源码插件的本地 Git 历史查询与版本校验（实际切换版本与重新编译仍走持久化构建任务）。
 use super::{
-    OperationContext, StorePlugin, enforce_host_compatibility, enforce_install_signature_policy,
-    find_store_plugin, is_valid_commit, is_valid_repo_url, jobs, plugin_target, read_store_plugin,
-    store_root,
+    OperationContext, StorePlugin, find_store_plugin, is_valid_commit, is_valid_repo_url, jobs,
+    plugin_target, read_store_plugin, store_root,
 };
 use crate::operation_error::{OperationError as OpError, Result as OpResult};
 use crate::source_build::{self, SourcePlugin};
@@ -50,8 +49,6 @@ pub(crate) struct GitHistory {
     dirty: bool,
     can_switch: bool,
     switch_limitation: Option<String>,
-    /// 若开启签名策略，则限制为商店清单中已签名的固定 commit SHA；为 `None` 时允许切换到本地仓库的任意有效提交。
-    allowed_commit: Option<String>,
     refs: Vec<GitRef>,
     commits: Vec<GitCommit>,
     offset: usize,
@@ -169,10 +166,8 @@ fn safe_repo_url(repo: &str) -> Option<String> {
     Some(parsed.to_string())
 }
 
-/// 校验目标仓库与 commit 是否符合商店签名与宿主版本兼容策略。
-/// 注意：商店清单中的签名仅针对「指定仓库 + 指定固定 commit」有效，不能沿用到该仓库的其他历史提交。
+/// 校验目标仓库地址与 commit 是否有效，并确认与商店记录仓库一致。
 pub(crate) fn target_policy(
-    cfg: &nuono_core::config::PluginStoreConfig,
     plugin: Option<&StorePlugin>,
     repo: &str,
     commit: &str,
@@ -183,30 +178,6 @@ pub(crate) fn target_policy(
     let plugin = plugin.filter(|p| !p.repo_url.is_empty());
     if plugin.is_some_and(|p| p.repo_url != repo) {
         return Err("已安装插件的仓库与商店发布记录不同，已停止操作".into());
-    }
-    enforce_install_signature_policy(cfg, plugin)?;
-    if let Some(plugin) = plugin {
-        if (cfg.require_signature
-            || plugin
-                .signature
-                .as_deref()
-                .is_some_and(|s| !s.trim().is_empty()))
-            && !plugin
-                .pinned_commit
-                .as_deref()
-                .is_some_and(|sha| sha.eq_ignore_ascii_case(commit))
-        {
-            return Err(
-                "当前签名策略仅允许切换至商店已签名的固定版本；其他历史版本尚无可验证签名".into(),
-            );
-        }
-        if plugin
-            .pinned_commit
-            .as_deref()
-            .is_some_and(|sha| sha.eq_ignore_ascii_case(commit))
-        {
-            enforce_host_compatibility(plugin)?;
-        }
     }
     Ok(())
 }
@@ -301,7 +272,6 @@ async fn local_history(
         dirty: false,
         can_switch: false,
         switch_limitation: None,
-        allowed_commit: None,
         refs: Vec::new(),
         commits: Vec::new(),
         offset: query.offset,
@@ -401,32 +371,17 @@ pub(crate) async fn history_view(
         ) {
             (Err(error), _) | (_, Err(error)) => Some(error),
             (Ok(repo), Ok(plugin)) => {
-                // 优先用商店固定 commit（无固定 commit 时退回当前 HEAD）预检商店签名策略是否配置完好，而不把签名效力扩散到任意历史提交。
                 let candidate = plugin
                     .as_ref()
                     .and_then(|p| p.pinned_commit.as_deref())
                     .or(view.source_commit.as_deref())
                     .unwrap_or_default();
-                target_policy(&cfg.plugin_store, plugin.as_ref(), &repo, candidate).err()
+                target_policy(plugin.as_ref(), &repo, candidate).err()
             }
         }
     };
     view.can_switch = limitation.is_none();
     view.switch_limitation = limitation;
-    if view.can_switch {
-        let cfg = state.config.snapshot().await;
-        let plugin = local_published_plugin(id, &cfg.plugin_store).await?;
-        if cfg.plugin_store.require_signature
-            || plugin
-                .as_ref()
-                .is_some_and(|p| p.signature.as_deref().is_some_and(|s| !s.trim().is_empty()))
-        {
-            view.switch_limitation = Some("当前签名策略仅允许切换至商店已签名的固定版本".into());
-            view.allowed_commit = plugin
-                .and_then(|p| p.pinned_commit)
-                .map(|commit| commit.to_ascii_lowercase());
-        }
-    }
     Ok(view)
 }
 

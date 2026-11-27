@@ -57,10 +57,6 @@ pub enum Command {
         #[command(subcommand)]
         command: PluginCommand,
     },
-    Sign {
-        #[command(subcommand)]
-        command: SignCommand,
-    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -116,19 +112,12 @@ pub enum PluginCommand {
     Test { path: std::path::PathBuf },
 }
 
-#[derive(Subcommand, Debug)]
-pub enum SignCommand {
-    Keygen,
-    Manifest { path: String, secret: String },
-}
-
 impl Command {
     /// 判断该命令是否需要转发给已静态链接的完整应用运行时执行。
     pub fn requires_runtime(&self) -> bool {
         matches!(
             self,
             Self::Admin { .. }
-                | Self::Sign { .. }
                 | Self::Release {
                     command: ReleaseCommand::Describe
                 }
@@ -138,7 +127,7 @@ impl Command {
 
 #[cfg(test)]
 mod cli_parser_tests {
-    use super::{AdminCommand, Cli, Command, PluginCommand, ReleaseCommand, SignCommand};
+    use super::{AdminCommand, Cli, Command, PluginCommand, ReleaseCommand};
     use clap::Parser;
 
     #[test]
@@ -229,29 +218,5 @@ mod cli_parser_tests {
         }
         assert!(Cli::try_parse_from(["nuono", "plugin", "doctor"]).is_ok());
         assert!(Cli::try_parse_from(["nuono", "plugin", "build"]).is_err());
-    }
-
-    #[test]
-    fn cli_parser_accepts_typed_sign_commands() {
-        let cli =
-            Cli::try_parse_from(["nuono", "sign", "keygen"]).expect("parse sign keygen command");
-        assert!(matches!(
-            cli.command,
-            Some(Command::Sign {
-                command: SignCommand::Keygen
-            })
-        ));
-
-        let cli = Cli::try_parse_from(["nuono", "sign", "manifest", "plugin.json", "secret-key"])
-            .expect("parse sign manifest command");
-        assert!(matches!(
-            cli.command,
-            Some(Command::Sign {
-                command: SignCommand::Manifest {
-                    ref path,
-                    ref secret
-                }
-            }) if path == "plugin.json" && secret == "secret-key"
-        ));
     }
 }

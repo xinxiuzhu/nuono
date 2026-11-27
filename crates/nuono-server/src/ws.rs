@@ -49,7 +49,7 @@ pub async fn onebot_ws_handler(
     if let Some(response) = crate::business_http::reject_unavailable(&state) {
         return response;
     }
-    let Some(listener) = state.bot_instances.source.listener_token("onebot") else {
+    let Some(listener) = state.bot_instances.source.reverse_ws_listener_token() else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let cfg = state.config.snapshot().await;

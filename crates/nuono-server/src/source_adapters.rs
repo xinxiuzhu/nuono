@@ -115,9 +115,11 @@ impl SourceInstances {
     pub(crate) fn close(&self) {
         self.closed.cancel();
     }
-    pub(crate) fn listener_token(&self, id: &str) -> Option<tokio_util::sync::CancellationToken> {
+    /// 获取已注册反向 WebSocket 适配器的监听取消令牌，按能力查找而不绑定适配器 ID。
+    pub(crate) fn reverse_ws_listener_token(&self) -> Option<tokio_util::sync::CancellationToken> {
+        let id = self.registry.legacy_codec_provider()?.descriptor().id;
         self.listeners
-            .get(id)
+            .get(&id)
             .filter(|token| !token.is_cancelled())
             .map(|token| token.clone())
     }

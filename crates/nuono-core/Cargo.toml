@@ -39,7 +39,6 @@ toml = { workspace = true }
 toml_edit = "0.25.15"
 
 # 认证与邮件
-ed25519-dalek = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
 hmac = { workspace = true }

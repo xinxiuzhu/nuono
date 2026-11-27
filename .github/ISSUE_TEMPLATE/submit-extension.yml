@@ -1,5 +1,5 @@
 name: 提交插件或适配器
-description: 通过 GitHub 仓库登记 Nuono 业务插件（nuono-plugin）或平台适配器（nuono-adapter）。
+description: 填写公开 GitHub 仓库地址，即可向 Nuono 官方商店登记插件或平台适配器。
 title: "[扩展提交] "
 labels:
   - extension-submission
@@ -7,92 +7,38 @@ body:
   - type: markdown
     attributes:
       value: |
-        欢迎向 Nuono 官方商店提交插件或适配器（当前仅支持公开 GitHub 仓库）。
-        维护者审核源码并给本 Issue 打上 `extension:approved` 标签后，GitHub Actions 会自动校验并将条目发布到官方目录。
-  - type: dropdown
-    id: kind
-    attributes:
-      label: 扩展类型
-      options:
-        - plugin
-        - adapter
-    validations:
-      required: true
+        欢迎向 Nuono 官方商店提交插件或平台适配器（支持公开 GitHub 仓库）。
+
+        只需填写你的 GitHub 仓库地址，其余信息（扩展类型 `plugin`/`adapter`、ID、版本号、作者、开源协议与最新提交）会在审核通过后自动从仓库的 `Cargo.toml` 中读取，无需手填。
+        维护者审核源码并给本 Issue 打上 `extension:approved` 标签后，GitHub Actions 会自动上架到官方商店目录；后续你向仓库推送新版本时，目录也会定时同步。
   - type: input
-    id: id
+    id: repository
     attributes:
-      label: 扩展 ID
-      description: 仅允许小写字母、数字、连字符 `-` 或下划线 `_`，最长 80 字符，不能为 `hub`。
-      placeholder: my-plugin
+      label: GitHub 源码仓库
+      description: 填写公开 GitHub 仓库 HTTPS 地址，仓库根目录需包含有效的 Nuono 插件或适配器 `Cargo.toml`。
+      placeholder: https://github.com/your-name/your-plugin
     validations:
       required: true
   - type: input
     id: name
     attributes:
       label: 展示名称
+      description: 可选；留空则自动使用仓库 `Cargo.toml` 中的名称。
       placeholder: My Plugin
     validations:
-      required: true
-  - type: input
-    id: author
-    attributes:
-      label: 作者
-      placeholder: your-github-handle
-    validations:
-      required: true
-  - type: input
-    id: repository
-    attributes:
-      label: GitHub 源码仓库
-      description: 填写公开 GitHub 仓库 HTTPS 地址。
-      placeholder: https://github.com/your-name/your-plugin
-    validations:
-      required: true
-  - type: input
-    id: version
-    attributes:
-      label: 版本号
-      description: 完整 SemVer 版本号，与仓库中 `Cargo.toml` 保持一致。
-      placeholder: 0.1.0
-    validations:
-      required: true
-  - type: input
-    id: commit
-    attributes:
-      label: 固定 Commit SHA
-      description: 完整 40 位小写十六进制 Git Commit SHA（目录锁定精确提交，不随分支自动漂移）。
-      placeholder: 0123456789abcdef0123456789abcdef01234567
-    validations:
-      required: true
-  - type: input
-    id: license
-    attributes:
-      label: 开源协议
-      placeholder: Apache-2.0
-    validations:
-      required: true
-  - type: input
-    id: nuono_version
-    attributes:
-      label: 适用的 Nuono 版本
-      description: 你已验证通过的确切 Nuono 版本号。
-      placeholder: 0.0.1
-    validations:
-      required: true
+      required: false
   - type: textarea
     id: description
     attributes:
       label: 简介
-      description: 一两句话说明扩展的功能。
-      placeholder: 提供……能力
+      description: 可选；留空则自动使用仓库 `Cargo.toml` 中的 `description`。
+      placeholder: 一两句话说明扩展的功能
     validations:
-      required: true
+      required: false
   - type: checkboxes
     id: agreement
     attributes:
       label: 提交确认
       options:
-        - label: 我有权提交上述登记信息，源码仓库公开可访问且许可证明确。
-          required: true
-        - label: 我已在对应的 Nuono 版本中完成编译与基本运行验证。
+        - label: 该仓库公开可访问，根目录包含有效的 Nuono 插件或适配器 `Cargo.toml`。
           required: true

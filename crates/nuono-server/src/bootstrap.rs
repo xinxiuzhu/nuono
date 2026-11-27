@@ -263,7 +263,7 @@ pub(crate) async fn async_main(cli: Cli) -> anyhow::Result<i32> {
     );
     nuono_core::core::media_links::init_global(media_link_base);
     let adapter = nuono_adapter::running()
-        .get("onebot")
+        .legacy_codec_provider()
         .and_then(|provider| provider.legacy_codec())
         .unwrap_or_else(|| Arc::new(crate::disabled_adapter::DisabledAdapter));
     let manager = ConnectionManager::new_prepared(

@@ -371,21 +371,12 @@ fn default_audit_retention_days() -> u64 {
     180
 }
 
-/// 插件商店的供应链签名策略。
-///
-/// - `signing_public_key`：运营者的 ed25519 公钥（hex，`nuono-server sign keygen` 生成）。
-/// - `require_signature`：true 时未签名的清单一律拒绝安装/更新；false（默认）时
-///   未签名照常安装，但**带签名而验错仍然拒绝** —— 有签名却对不上是篡改信号，
-///   渐进模式只放宽「没有签名」这一种情况。
+/// 插件商店目录来源配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginStoreConfig {
     /// 缺省使用官方索引；显式 null 保留为仅使用本地清单。
     #[serde(default = "default_plugin_store_index_url")]
     pub index_url: Option<String>,
-    #[serde(default)]
-    pub signing_public_key: Option<String>,
-    #[serde(default)]
-    pub require_signature: bool,
 }
 
 pub const OFFICIAL_PLUGIN_STORE_INDEX_URL: &str =
@@ -399,8 +390,6 @@ impl Default for PluginStoreConfig {
     fn default() -> Self {
         Self {
             index_url: default_plugin_store_index_url(),
-            signing_public_key: None,
-            require_signature: false,
         }
     }
 }

@@ -94,11 +94,7 @@ pub struct StorePlugin {
     pub repo_url: String,
     /// 商店清单固定要安装的 git commit（40 位十六进制）。None = 清单未固定。
     pub pinned_commit: Option<String>,
-    /// 运营者对 `repo + commit` 的 ed25519 签名（hex），由本模块的商店签名策略校验。
-    pub signature: Option<String>,
     pub license: Option<String>,
-    /// 商店兼容性验证通过时所针对的具体 Nuono 宿主版本号。
-    pub nuono_version: Option<String>,
     pub installed: bool,
     pub installed_version: Option<String>,
     /// 当前安装目录 HEAD 的 commit。
@@ -117,8 +113,6 @@ pub struct StorePlugin {
 pub struct StoreCatalog {
     pub plugins: Vec<StorePlugin>,
     pub index_url: Option<String>,
-    pub signing_public_key: Option<String>,
-    pub require_signature: bool,
     pub stale: bool,
     pub warning: Option<String>,
 }
@@ -128,8 +122,6 @@ pub struct StoreCatalog {
 #[schema(as = api::plugin_store::StoreSettingsBody)]
 pub struct StoreSettingsBody {
     pub index_url: String,
-    pub signing_public_key: String,
-    pub require_signature: bool,
 }
 
 /// 校验并保存插件商店设置补丁（交由 `ConfigManager` 持久化）。
@@ -137,26 +129,11 @@ pub(crate) async fn save_settings(
     config: &ConfigManager,
     body: StoreSettingsBody,
 ) -> nuono_core::error::Result<()> {
-    let key = body.signing_public_key.trim();
-    if !key.is_empty() && (key.len() != 64 || !key.bytes().all(|byte| byte.is_ascii_hexdigit())) {
-        return Err(nuono_core::NuonoError::Validation(
-            "签名公钥需要 32 字节 hex".into(),
-        ));
-    }
-    if body.require_signature && key.is_empty() {
-        return Err(nuono_core::NuonoError::Validation(
-            "要求签名时请填写商店公钥".into(),
-        ));
-    }
-    let optional = |value: String| {
-        let value = value.trim().to_string();
-        (!value.is_empty()).then_some(value)
-    };
+    let index_url = body.index_url.trim().to_string();
+    let index_url = (!index_url.is_empty()).then_some(index_url);
     let patch = nuono_core::db::RuntimeConfigPatch {
         settings: serde_json::json!({"plugin_store": {
-            "index_url": optional(body.index_url),
-            "signing_public_key": optional(body.signing_public_key),
-            "require_signature": body.require_signature,
+            "index_url": index_url,
         }}),
         secrets: Vec::new(),
     };
@@ -174,9 +151,7 @@ impl From<crate::plugin_catalog::CatalogPlugin> for StorePlugin {
             author: plugin.author,
             repo_url: plugin.repo,
             pinned_commit: Some(plugin.commit),
-            signature: plugin.signature,
             license: plugin.license,
-            nuono_version: plugin.nuono_version,
             installed: false,
             installed_version: None,
             installed_commit: None,
@@ -216,8 +191,6 @@ pub(crate) async fn store_catalog(
     let mut view = StoreCatalog {
         plugins: Vec::new(),
         index_url: cfg.index_url.clone(),
-        signing_public_key: cfg.signing_public_key.clone(),
-        require_signature: cfg.require_signature,
         stale: false,
         warning: None,
     };
@@ -345,9 +318,7 @@ fn empty_catalog_item(id: &str) -> StorePlugin {
         author: String::new(),
         repo_url: String::new(),
         pinned_commit: None,
-        signature: None,
         license: None,
-        nuono_version: None,
         installed: false,
         installed_version: None,
         installed_commit: None,
@@ -442,9 +413,7 @@ fn read_store_plugin(dir: &std::path::Path, id: &str) -> Result<Option<StorePlug
         author: text("author").unwrap_or_else(|| "unknown".into()),
         repo_url,
         pinned_commit: commit,
-        signature: text("signature"),
         license: text("license"),
-        nuono_version: text("nuono_version"),
         installed: false,
         installed_version: None,
         installed_commit: None,
@@ -464,85 +433,6 @@ fn select_repo(body_repo: Option<&str>, plugin: Option<&StorePlugin>) -> Result<
         (Some(requested), None) => Ok(requested.to_string()),
         (None, None) => Err("插件未在商店中找到，请提供 repo_url".into()),
     }
-}
-
-fn enforce_host_compatibility(plugin: &StorePlugin) -> Result<(), String> {
-    if let Some(version) = plugin.nuono_version.as_deref()
-        && version != env!("CARGO_PKG_VERSION")
-    {
-        return Err(format!(
-            "该插件版本通过 Nuono {version} 的构建验证，当前为 {}",
-            env!("CARGO_PKG_VERSION")
-        ));
-    }
-    Ok(())
-}
-
-/// 供应链签名策略（渐进式）：
-/// - 清单带签名 → 必须配置了验签公钥，且签名对 `repo + commit` 验过；否则拒装。
-/// - 清单无签名且 `require_signature = true` → 拒装。
-/// - 清单无签名且未强制 → 放行（渐进期现状）。
-fn enforce_signature_policy(
-    cfg: &nuono_core::config::PluginStoreConfig,
-    plugin: &StorePlugin,
-) -> Result<(), String> {
-    match (
-        plugin
-            .signature
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty()),
-        cfg.signing_public_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty()),
-        cfg.require_signature,
-    ) {
-        // 签名存在但公钥没配：没法验，拒装 —— 宁可不装，不装「看起来安全」的。
-        (Some(_), None, _) => {
-            Err("清单带签名但未配置 [plugin_store] signing_public_key，拒绝安装".into())
-        }
-        (Some(sig), Some(pk), _) => {
-            let Some(commit) = plugin.pinned_commit.as_deref() else {
-                return Err("清单带签名但没有固定 commit，签名无从验证，拒绝安装".into());
-            };
-            if nuono_core::service::plugin_store::verify_commit_signature(
-                &plugin.repo_url,
-                commit,
-                sig,
-                pk,
-            ) {
-                Ok(())
-            } else {
-                Err("插件清单签名校验失败，拒绝安装".into())
-            }
-        }
-        (None, _, true) => {
-            Err("该插件未签名，当前策略（require_signature = true）要求签名，拒绝安装".into())
-        }
-        (None, _, false) => Ok(()),
-    }
-}
-
-/// 安装入口的签名策略：商店无清单（ad-hoc `repo_url` 安装）与有清单一视同仁。
-///
-/// ad-hoc 安装没有签名可验。`require_signature = true` 时必须整类拒绝 ——
-/// 签名策略是无条件前置，不能因为「商店清单里没有这个插件」就跳过，
-/// 否则强制签名形同虚设（native 插件与主进程同权限）。
-fn enforce_install_signature_policy(
-    cfg: &nuono_core::config::PluginStoreConfig,
-    store_plugin: Option<&StorePlugin>,
-) -> Result<(), String> {
-    let Some(plugin) = store_plugin else {
-        if cfg.require_signature {
-            return Err(
-                "插件不在商店清单中：require_signature = true 时不允许无签名的 ad-hoc 安装，请先在商店清单中登记该插件（含签名与固定 commit）"
-                    .into(),
-            );
-        }
-        return Ok(());
-    };
-    enforce_signature_policy(cfg, plugin)
 }
 
 #[cfg(test)]
@@ -649,9 +539,8 @@ pub(crate) fn recover_before_build(root: &std::path::Path) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nuono_core::config::PluginStoreConfig;
 
-    fn unsigned_store_plugin() -> StorePlugin {
+    fn sample_store_plugin() -> StorePlugin {
         StorePlugin {
             kind: SourceKind::Plugin,
             id: "demo".into(),
@@ -661,9 +550,7 @@ mod tests {
             author: String::new(),
             repo_url: "https://example.com/demo.git".into(),
             pinned_commit: None,
-            signature: None,
             license: None,
-            nuono_version: None,
             installed: false,
             installed_version: None,
             installed_commit: None,
@@ -683,7 +570,7 @@ mod tests {
             commit: Some("compiled-commit".into()),
             ..Default::default()
         };
-        let mut plugin = unsigned_store_plugin();
+        let mut plugin = sample_store_plugin();
         mark_catalog_state(&mut plugin, &target, Some(&running), false);
         assert!(!plugin.installed);
         assert_eq!(plugin.running_version.as_deref(), Some("1.2.3"));
@@ -710,7 +597,7 @@ mod tests {
         let source = target.join("src/lib.rs");
         std::fs::write(&source, "pub const VALUE: u8 = 1;\n").unwrap();
         let running = crate::source_build::source_identity(&target).unwrap();
-        let mut plugin = unsigned_store_plugin();
+        let mut plugin = sample_store_plugin();
         mark_catalog_state(&mut plugin, &target, Some(&running), true);
         assert!(!plugin.pending_restart);
 
@@ -746,53 +633,15 @@ mod tests {
         assert!(!is_valid_commit(""));
     }
 
-    /// 强制签名时，商店无清单的 ad-hoc 安装必须被拒绝。
-    ///
-    /// 这条 pin 的是 ad-hoc 入口曾把 `enforce_signature_policy` 整段跳过的绕过：
-    /// `require_signature = true` 的承诺不能取决于插件「恰好不在清单里」。
     #[test]
-    fn require_signature_rejects_adhoc_install_without_manifest() {
-        let cfg = PluginStoreConfig {
-            require_signature: true,
-            ..PluginStoreConfig::default()
-        };
-
-        assert!(enforce_install_signature_policy(&cfg, None).is_err());
-    }
-
-    #[test]
-    fn adhoc_install_allowed_when_signatures_not_required() {
-        let cfg = PluginStoreConfig::default();
-        assert!(enforce_install_signature_policy(&cfg, None).is_ok());
-    }
-
-    #[test]
-    fn unsigned_manifest_plugin_still_rejected_under_require_signature() {
-        let cfg = PluginStoreConfig {
-            require_signature: true,
-            ..PluginStoreConfig::default()
-        };
-        assert!(enforce_install_signature_policy(&cfg, Some(&unsigned_store_plugin())).is_err());
-    }
-
-    #[test]
-    fn signed_store_source_cannot_be_replaced_by_install_body() {
-        let plugin = unsigned_store_plugin();
+    fn store_source_cannot_be_replaced_by_install_body() {
+        let plugin = sample_store_plugin();
         assert!(select_repo(Some("https://evil.example/demo.git"), Some(&plugin)).is_err());
         assert_eq!(select_repo(None, Some(&plugin)).unwrap(), plugin.repo_url);
         assert_eq!(
             select_repo(Some(&plugin.repo_url), Some(&plugin)).unwrap(),
             plugin.repo_url
         );
-    }
-
-    #[test]
-    fn store_release_requires_its_tested_host_version() {
-        let mut plugin = unsigned_store_plugin();
-        plugin.nuono_version = Some(env!("CARGO_PKG_VERSION").into());
-        assert!(enforce_host_compatibility(&plugin).is_ok());
-        plugin.nuono_version = Some("999.0.0".into());
-        assert!(enforce_host_compatibility(&plugin).is_err());
     }
 
     #[test]
@@ -851,7 +700,7 @@ mod tests {
         let new = installed_commit(&root).unwrap();
         successful_git(git_at(&root, &["checkout", "--detach", &old]).await).unwrap();
         std::fs::write(root.join(".nuono-pin"), format!("{old}\n")).unwrap();
-        let mut plugin = unsigned_store_plugin();
+        let mut plugin = sample_store_plugin();
         plugin.pinned_commit = Some(new.clone());
         mark_installed(&mut plugin, &root);
         assert!(

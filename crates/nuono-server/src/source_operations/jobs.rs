@@ -1,7 +1,7 @@
 //! 持久化源码插件操作任务（安装、更新、版本切换、卸载）与中断恢复；后台构建任务独立运行，不绑定 HTTP 请求生命周期。
 use super::{
-    OperationContext, enforce_host_compatibility, enforce_install_signature_policy,
-    find_store_plugin, git, installed_commit, is_valid_plugin_id, is_valid_repo_url, select_repo,
+    OperationContext, find_store_plugin, git, installed_commit, is_valid_plugin_id,
+    is_valid_repo_url, select_repo,
 };
 use crate::operation_error::{OperationError as OpError, Result as OpResult};
 use crate::source_build::{self, SourceKind, SourcePlugin};
@@ -506,7 +506,7 @@ pub(crate) async fn submit(
             let config = state.config.snapshot().await;
             let plugin =
                 find_store_plugin(&super::source_key(kind, &id), &config.plugin_store).await?;
-            git::target_policy(&config.plugin_store, plugin.as_ref(), &repo, commit)?;
+            git::target_policy(plugin.as_ref(), &repo, commit)?;
             Ok::<(), String>(())
         }
         .await;
@@ -680,12 +680,6 @@ async fn run_job(
             &config.plugin_store,
         )
         .await?;
-        enforce_install_signature_policy(&config.plugin_store, plugin.as_ref())?;
-        if let Some(plugin) = &plugin
-            && job.target_commit.is_none()
-        {
-            enforce_host_compatibility(plugin)?;
-        }
         if job.operation == "install" {
             job.staged_name = Some(format!(".nuono-install-{}", job.id));
             phase(&directory, job, "downloading", "正在下载插件源码")?;
@@ -724,7 +718,7 @@ async fn run_job(
             let origin = git::origin(&target).await?;
             let explicit = job.target_commit.is_some();
             let commit = if let Some(commit) = &job.target_commit {
-                git::target_policy(&config.plugin_store, plugin.as_ref(), &origin, commit)?;
+                git::target_policy(plugin.as_ref(), &origin, commit)?;
                 git::verify_commit(&target, commit).await?;
                 commit.clone()
             } else {

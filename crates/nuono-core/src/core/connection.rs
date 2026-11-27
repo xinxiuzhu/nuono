@@ -942,7 +942,7 @@ impl ConnectionManager {
                                     api_client: api_client.clone(),
                                     sender: msg_tx_recv.clone(),
                                     avatar_resolver: Arc::new(crate::media::HostImageResolver::new()),
-                                    avatar_source:{ let provider=nuono_adapter::running().get("onebot");Arc::new(move|request|provider.as_ref().map(|provider|provider.avatar_source(request)).transpose().map(Option::flatten)) },
+                                    avatar_source:{ let provider=nuono_adapter::running().legacy_codec_provider();Arc::new(move|request|provider.as_ref().map(|provider|provider.avatar_source(request)).transpose().map(Option::flatten)) },
                                 }),
                                 ip: ip_clone.clone(),
                                 heartbeat_timeout,

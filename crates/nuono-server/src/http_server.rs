@@ -29,7 +29,7 @@ pub(crate) fn router(app_state: AppState) -> Router {
         reverse = if app_state
             .bot_instances
             .source
-            .listener_token("onebot")
+            .reverse_ws_listener_token()
             .is_some()
         {
             reverse.route(path, any(ws::onebot_ws_handler))

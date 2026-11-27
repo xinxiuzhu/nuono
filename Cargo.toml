@@ -95,7 +95,6 @@ async-trait = { version = "0.1" }
 uuid = { version = "1.0", features = ["v4", "v7", "serde"] }
 base64 = "0.23"
 bcrypt = "0.19"
-ed25519-dalek = "3"
 hex = "0.4"
 hmac = "0.13"
 sha2 = "0.11"

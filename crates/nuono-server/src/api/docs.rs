@@ -558,7 +558,6 @@ mod tests {
                 let response =
                     &operation["responses"]["200"]["content"]["application/json"]["schema"];
                 assert!(response_contains(response, &doc, "plugin_id", 0));
-                assert!(response_contains(response, &doc, "allowed_commit", 0));
                 assert!(response_contains(response, &doc, "next_offset", 0));
             }
         }
@@ -578,7 +577,6 @@ mod tests {
             "dirty",
             "can_switch",
             "switch_limitation",
-            "allowed_commit",
             "reference",
             "offset",
             "next_offset",

@@ -62,7 +62,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 
-use nuono_tooling::cli::{AdminCommand, Cli, Command, ReleaseCommand, SignCommand};
+use nuono_tooling::cli::{AdminCommand, Cli, Command, ReleaseCommand};
 
 /// HTTP handler 共享的已装配应用依赖。
 ///
@@ -99,70 +99,12 @@ impl axum::extract::FromRef<AppState> for Arc<ConnectionManager> {
     }
 }
 
-/// `nuono sign` 子命令：插件商店清单的 ed25519 签名工具。
-///
-/// 规范消息是 `"{repo}\n{commit}"`，与验证端共用 `service::plugin_store`。
-/// 返回进程退出码：0 成功，1 失败。整个子命令不触碰配置与数据库。
-fn run_sign_command(command: SignCommand) -> i32 {
-    match command {
-        SignCommand::Keygen => match nuono_core::service::plugin_store::generate_keypair() {
-            Ok((secret, public)) => {
-                println!("私钥（妥善保管，勿入库）: {secret}");
-                println!("公钥（写入 nuono.toml [plugin_store] signing_public_key）: {public}");
-                0
-            }
-            Err(error) => {
-                eprintln!("生成密钥失败: {error}");
-                1
-            }
-        },
-        SignCommand::Manifest { path, secret } => {
-            let content = match std::fs::read_to_string(&path) {
-                Ok(content) => content,
-                Err(error) => {
-                    eprintln!("读取清单失败: {error}");
-                    return 1;
-                }
-            };
-            let value: serde_json::Value = match serde_json::from_str(&content) {
-                Ok(value) => value,
-                Err(error) => {
-                    eprintln!(
-                        "清单不是合法 JSON: {error}（请先将 plugin.toml 转换为 plugin.json 后再签名）"
-                    );
-                    return 1;
-                }
-            };
-            let value = value.get("plugin").unwrap_or(&value);
-            let (Some(repo), Some(commit)) = (
-                value.get("repo").and_then(|value| value.as_str()),
-                value.get("commit").and_then(|value| value.as_str()),
-            ) else {
-                eprintln!("清单缺少 repo 或 commit 字段，无法计算签名");
-                return 1;
-            };
-            match nuono_core::service::plugin_store::sign_commit(repo, commit, &secret) {
-                Ok(signature) => {
-                    println!("请将以下内容写入清单 JSON（与 repo/commit 同级）:");
-                    println!("\"signature\": \"{signature}\"");
-                    0
-                }
-                Err(error) => {
-                    eprintln!("签名失败: {error}");
-                    1
-                }
-            }
-        }
-    }
-}
-
 fn run_offline_command(
     command: Command,
     config_path: Option<&std::path::Path>,
     factories: Option<&[nuono_core::plugin::source_loader::PluginFactory]>,
 ) -> i32 {
     match command {
-        Command::Sign { command } => run_sign_command(command),
         Command::Release {
             command: ReleaseCommand::Describe,
         } => match release::describe(factories) {

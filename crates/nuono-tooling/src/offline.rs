@@ -104,6 +104,5 @@ pub fn run_offline_command(command: Command, config_path: Option<&std::path::Pat
                 }
             }
         }
-        Command::Sign { .. } => unreachable!("runtime command forwarded"),
     }
 }

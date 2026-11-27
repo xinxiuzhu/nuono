@@ -339,7 +339,7 @@ async fn legacy_routes_distinguish_bad_input_missing_state_and_conflicts() {
         (
             "POST",
             "/api/store/settings",
-            json!({"index_url":"","signing_public_key":"bad-key","require_signature":true}),
+            json!({"index_url":"http://insecure.example/catalog.json"}),
             400,
         ),
         ("POST", "/api/ai/chat", json!({"messages":[]}), 409),

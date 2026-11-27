@@ -17,7 +17,6 @@ pub mod managed_messages;
 pub mod messages;
 pub mod plugin_configuration;
 pub mod plugin_debug;
-pub mod plugin_store;
 pub mod plugins;
 pub mod privacy_journal;
 pub mod pubsub;

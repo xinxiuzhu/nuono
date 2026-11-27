@@ -41,12 +41,7 @@ pub(crate) struct CatalogPlugin {
     pub repo: String,
     pub commit: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub signature: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
-    /// 插件作者测试并验证该版本时所针对的具体 Nuono 宿主版本号。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub nuono_version: Option<String>,
 }
 
 #[derive(Debug)]
@@ -161,21 +156,8 @@ impl CatalogPlugin {
                 self.id
             ));
         }
-        if let Some(signature) = &self.signature
-            && (signature.len() != 128 || !signature.bytes().all(|value| value.is_ascii_hexdigit()))
-        {
-            return Err(format!("插件 {} 的 signature 必须是 64 字节 hex", self.id));
-        }
         if let Some(license) = &self.license {
             nonempty_field(license, "license", &self.id)?;
-        }
-        if let Some(version) = &self.nuono_version
-            && !is_exact_version(version)
-        {
-            return Err(format!(
-                "插件 {} 的 nuono_version 必须是已测试宿主的精确版本号",
-                self.id
-            ));
         }
         Ok(())
     }
@@ -418,8 +400,7 @@ mod tests {
                 "author": "example",
                 "repo": "https://github.com/example/nuono-demo-adapter.git",
                 "commit": "0123456789abcdef0123456789abcdef01234567",
-                "license": "MIT",
-                "nuono_version": "0.4.0"
+                "license": "MIT"
             }]
         })
     }
@@ -488,9 +469,6 @@ mod tests {
             ("repo", "https://token@github.com/x/plugin.git"),
             ("commit", "abcdef"),
             ("commit", "0123456789abcdef0123456789abcdef0123456g"),
-            ("signature", "bad-signature"),
-            ("nuono_version", "^0.4"),
-            ("nuono_version", ">=0.4.0"),
         ] {
             let mut value = catalog_value();
             value["plugins"][0][field] = invalid.into();

@@ -345,11 +345,12 @@ impl AdapterRegistry {
     pub fn register(&mut self, provider: Arc<dyn AdapterProvider>) -> Result<()> {
         let descriptor = provider.descriptor();
         descriptor.validate()?;
+        let has_legacy_codec = provider.legacy_codec().is_some();
         if self.providers.contains_key(&descriptor.id)
-            || self
-                .providers
-                .values()
-                .any(|existing| existing.descriptor().platform == descriptor.platform)
+            || self.providers.values().any(|existing| {
+                existing.descriptor().platform == descriptor.platform
+                    || (has_legacy_codec && existing.legacy_codec().is_some())
+            })
         {
             return Err(NuonoError::Conflict(format!(
                 "适配器或平台重复注册: {}",
@@ -367,6 +368,13 @@ impl AdapterRegistry {
         self.providers
             .values()
             .find(|provider| provider.descriptor().platform == platform)
+            .cloned()
+    }
+    /// 查找声明了反向 WebSocket 编解码器的适配器，不依赖具体适配器 ID 名称。
+    pub fn legacy_codec_provider(&self) -> Option<Arc<dyn AdapterProvider>> {
+        self.providers
+            .values()
+            .find(|provider| provider.legacy_codec().is_some())
             .cloned()
     }
     pub fn descriptors(&self) -> Vec<AdapterDescriptor> {
@@ -487,5 +495,92 @@ mod tests {
         value.fields[0] = ConfigField::password("token", "Token", "").required();
         value.validate().unwrap();
         assert_eq!(value.defaults()["token"], "");
+    }
+
+    #[test]
+    fn legacy_codec_provider_is_resolved_by_capability_not_adapter_id() {
+        #[derive(Debug)]
+        struct DummyCodec;
+        #[async_trait]
+        impl PlatformAdapter for DummyCodec {
+            fn platform_name(&self) -> &str {
+                "OneBot v11"
+            }
+            fn platform_version(&self) -> &str {
+                "v11"
+            }
+            fn capabilities(&self) -> AdapterCapabilities {
+                AdapterCapabilities::default()
+            }
+            fn extract_self_id(&self, _: &str) -> Option<i64> {
+                None
+            }
+            fn parse_incoming(&self, _: &str) -> Result<UnifiedEvent> {
+                Err(NuonoError::Validation("unused".into()))
+            }
+            fn build_action(&self, _: &nuono_app::platform::Action) -> Value {
+                Value::Null
+            }
+            fn build_send_message(
+                &self,
+                _: &nuono_app::platform::MessageType,
+                _: i64,
+                _: &str,
+            ) -> Value {
+                Value::Null
+            }
+            fn segments_to_protocol(&self, _: &[nuono_app::platform::UnifiedSegment]) -> Value {
+                Value::Null
+            }
+        }
+        struct ReverseWsProvider(AdapterDescriptor);
+        #[async_trait]
+        impl AdapterProvider for ReverseWsProvider {
+            fn descriptor(&self) -> AdapterDescriptor {
+                self.0.clone()
+            }
+            fn legacy_codec(&self) -> Option<Arc<dyn PlatformAdapter>> {
+                Some(Arc::new(DummyCodec))
+            }
+            fn normalize(
+                &self,
+                _: &BotIdentity,
+                _: &UnifiedEvent,
+                _: chrono::DateTime<chrono::Utc>,
+            ) -> std::result::Result<DomainEvent, DomainModelError> {
+                Err(DomainModelError::InvalidValue {
+                    field: "platform",
+                    expected: "fixture event",
+                })
+            }
+            async fn create(
+                &self,
+                _: AdapterInstanceConfig,
+                _: Arc<dyn AdapterHost>,
+            ) -> Result<Arc<dyn AdapterRuntime>> {
+                Err(NuonoError::Validation("unused".into()))
+            }
+        }
+
+        let mut registry = AdapterRegistry::default();
+        assert!(registry.legacy_codec_provider().is_none());
+        let mut desc = descriptor();
+        desc.id = "onebotv11".into();
+        desc.platform = "onebot".into();
+        registry
+            .register(Arc::new(ReverseWsProvider(desc.clone())))
+            .unwrap();
+        let resolved = registry.legacy_codec_provider().unwrap();
+        assert_eq!(resolved.descriptor().id, "onebotv11");
+        assert!(registry.for_platform("onebot").is_some());
+
+        let mut conflict = desc;
+        conflict.id = "another-reverse-ws".into();
+        conflict.platform = "other_reverse_ws".into();
+        assert!(
+            registry
+                .register(Arc::new(ReverseWsProvider(conflict)))
+                .is_err()
+        );
     }
 }

@@ -271,41 +271,23 @@ async fn stale_expected_commit_and_reference_option_injection_are_rejected() {
 }
 
 #[test]
-fn signatures_cannot_be_bypassed_by_selecting_a_git_commit() {
+fn target_policy_checks_repo_consistency_and_commit_format() {
     let repo = "https://example.invalid/demo.git";
     let commit = "1111111111111111111111111111111111111111";
-    let mut cfg = nuono_core::config::PluginStoreConfig::default();
-    assert!(target_policy(&cfg, None, repo, commit).is_ok());
+    assert!(target_policy(None, repo, commit).is_ok());
+    assert!(target_policy(None, repo, "short-sha").is_err());
     let mut plugin = empty_catalog_item("demo");
     plugin.repo_url = repo.into();
     plugin.pinned_commit = Some(commit.into());
+    assert!(target_policy(Some(&plugin), repo, commit).is_ok());
+    assert!(target_policy(Some(&plugin), "https://other.invalid/demo.git", commit).is_err());
     assert!(
         target_policy(
-            &cfg,
-            Some(&plugin),
-            "https://other.invalid/demo.git",
-            commit
-        )
-        .is_err()
-    );
-    cfg.require_signature = true;
-    assert!(target_policy(&cfg, None, repo, commit).is_err());
-    assert!(target_policy(&cfg, Some(&plugin), repo, commit).is_err());
-    let secret = hex::encode([1u8; 32]);
-    let key = ed25519_dalek::SigningKey::from_bytes(&[1u8; 32]);
-    cfg.signing_public_key = Some(hex::encode(key.verifying_key().to_bytes()));
-    plugin.signature =
-        Some(nuono_core::service::plugin_store::sign_commit(repo, commit, &secret).unwrap());
-    assert!(target_policy(&cfg, Some(&plugin), repo, commit).is_ok());
-    assert!(
-        target_policy(
-            &cfg,
             Some(&plugin),
             repo,
             "2222222222222222222222222222222222222222"
         )
-        .unwrap_err()
-        .contains("签名策略")
+        .is_ok()
     );
 }
 
