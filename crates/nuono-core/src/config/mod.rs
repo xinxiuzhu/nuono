@@ -45,6 +45,7 @@ pub struct NuonoConfig {
     pub host: String,
     pub port: u16,
 
+    #[serde(default)]
     pub log: LogConfig,
     pub database: DatabaseConfig,
     #[serde(default)]
@@ -405,6 +406,7 @@ impl Default for PluginStoreConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LogConfig {
     pub level: String,
     pub output: Vec<String>,
@@ -594,11 +596,22 @@ impl Default for QqOfficialConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, Validate)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[serde(default)]
 pub struct UpstreamConfig {
     pub default_url: String,
     pub reconnect_interval_secs: u64,
     pub heartbeat_timeout_secs: u64,
+}
+
+impl Default for UpstreamConfig {
+    fn default() -> Self {
+        Self {
+            default_url: "ws://127.0.0.1:9923/ws".into(),
+            reconnect_interval_secs: 5,
+            heartbeat_timeout_secs: 30,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
@@ -739,11 +752,7 @@ impl Default for NuonoConfig {
             feishu: FeishuConfig::default(),
             qq_official: QqOfficialConfig::default(),
             subscription: SubscriptionConfig::default(),
-            upstream: UpstreamConfig {
-                default_url: "ws://127.0.0.1:9923/ws".into(),
-                reconnect_interval_secs: 5,
-                heartbeat_timeout_secs: 30,
-            },
+            upstream: UpstreamConfig::default(),
             metrics: MetricsConfig::default(),
             mail: MailConfig::default(),
             backup: BackupConfig::default(),
@@ -1185,37 +1194,33 @@ pub fn default_config_path() -> PathBuf {
 
 /// 首次启动生成的 bootstrap 最小模板。
 ///
-/// 只包含「连接数据库之前就固定」的字段：其余运行设置以数据库为权威来源，写进
-/// 模板反而会诱导用户直接编辑文件、与 Dashboard 的保存互相冲突。模板必须能反序
-/// 化出与 [`NuonoConfig::default`] 等价的有效配置——凡是 serde 缺省值不合法的段
-/// （如 `upstream` 的派生默认值全为 0）都必须显式列出。
+/// 只包含「连接数据库之前就固定」的启动参数：其余运行设置（含日志级别、上游参数等）
+/// 以数据库为权威来源，由 Dashboard 维护，避免用户在文件与后台之间产生配置冲突。
 const BOOTSTRAP_TEMPLATE: &str = r#"# Nuono bootstrap 配置
 #
-# 这里只保留「连接数据库之前就固定」的启动参数。其余运行设置（AI、平台接入、
-# 邮件、限流等）以数据库为权威来源，由 Dashboard 的设置页维护，保存后立即生效
-# 且重启不丢失，不要写进本文件。
+# 这里只保留「连接数据库之前就必须确定」的启动参数，修改后需重启生效。
+# 其余运行设置（日志级别、AI、平台接入、邮件、指令策略等）以数据库为权威来源，
+# 请在 Dashboard 设置页维护，保存后立即生效且重启不丢失，不要写进本文件。
 
-# 监听地址。改为 0.0.0.0 属于知情动作：公网部署前应先完成初始化。
+# 监听地址与端口。改为 0.0.0.0 属于知情动作：公网部署前应先完成管理员初始化。
 host = "127.0.0.1"
 port = 9923
 
 [log]
-level = "INFO"
+# 日志输出通道（连接数据库前即固定，运行期仅支持在 Dashboard 热切日志级别）：
+# - "stdout"：输出到终端控制台
+# - "file"：按天写入 logs/ 目录的 JSON 日志文件（保留 7 天，供后台日志页查看）
 output = ["stdout", "file"]
-module = false
 
 [database]
+# 数据库连接地址：默认使用本地 SQLite，也可切换为 PostgreSQL（如 postgres://user:pass@127.0.0.1:5432/nuono）。
 url = "sqlite://data/nuono.db?mode=rwc"
+# 数据库连接池最大连接数（1..=1024）。
 max_connections = 5
 
 [build]
 # 默认开启增量编译；改为 false 可关闭后续源码构建的增量缓存。
 incremental = true
-
-[upstream]
-default_url = "ws://127.0.0.1:9923/ws"
-reconnect_interval_secs = 5
-heartbeat_timeout_secs = 30
 "#;
 
 /// 源码启动器在构建或初始化运行时前生成缺失的 bootstrap 文件。
@@ -1788,13 +1793,19 @@ mod tests {
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         assert!(content.contains("bootstrap 配置"));
         assert!(content.contains("[build]"));
+        assert!(!content.contains("[upstream]"));
+        assert!(!content.contains("level ="));
         let parsed: NuonoConfig = toml::from_str(&content).unwrap();
         assert!(parsed.validate_bootstrap().is_ok());
         assert_eq!(parsed.host, config.host);
         assert_eq!(parsed.port, config.port);
+        assert_eq!(parsed.log.level, "INFO");
+        assert_eq!(parsed.log.output, vec!["stdout", "file"]);
+        assert!(!parsed.log.module);
         assert_eq!(parsed.database.url, config.database.url);
         assert_eq!(parsed.build, config.build);
         assert_eq!(parsed.upstream.reconnect_interval_secs, 5);
+        assert_eq!(parsed.upstream.heartbeat_timeout_secs, 30);
 
         // 已有用户文件原样解析、绝不改写。
         let user = NuonoConfig {
