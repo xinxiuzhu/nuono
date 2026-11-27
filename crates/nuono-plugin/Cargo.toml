@@ -30,7 +30,7 @@ nuono-plugin-macros = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }
-rmcp = { version = "=3.10.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest-native-tls"], optional = true }
+rmcp = { version = "=3.11.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest-native-tls"], optional = true }
 sha2 = { workspace = true }
 base64 = { workspace = true }
 url = { workspace = true }
