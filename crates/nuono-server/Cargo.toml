@@ -68,7 +68,7 @@ metrics-exporter-prometheus = { workspace = true }
 # Utils
 rand = { workspace = true }
 base64 = { workspace = true }
-qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+qrcode = { version = "0.15", default-features = false, features = ["svg"] }
 tar = "0.4.46"
 flate2 = "1"
 rpassword = "7"
