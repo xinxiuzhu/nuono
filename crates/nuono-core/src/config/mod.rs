@@ -380,7 +380,7 @@ pub struct PluginStoreConfig {
 }
 
 pub const OFFICIAL_PLUGIN_STORE_INDEX_URL: &str =
-    "https://raw.githubusercontent.com/xinxiuzhu/nuono/catalog/extensions-v2.json";
+    "https://raw.githubusercontent.com/xinxiuzhu/nuono/catalog/extensions.json";
 
 fn default_plugin_store_index_url() -> Option<String> {
     Some(OFFICIAL_PLUGIN_STORE_INDEX_URL.to_string())

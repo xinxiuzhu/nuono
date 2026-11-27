@@ -7,14 +7,13 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 1;
 const MAX_CATALOG_BYTES: usize = 2 * 1024 * 1024;
 const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone)]
 pub(crate) struct Catalog {
-    pub schema_version: u32,
     pub plugins: Vec<CatalogPlugin>,
 }
 
@@ -22,7 +21,7 @@ impl Serialize for Catalog {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let mut state = serializer.serialize_struct("Catalog", 2)?;
-        state.serialize_field("schema_version", &self.schema_version.max(2))?;
+        state.serialize_field("schema_version", &SCHEMA_VERSION)?;
         state.serialize_field("extensions", &self.plugins)?;
         state.end()
     }
@@ -172,33 +171,22 @@ pub(crate) fn parse_catalog(content: &[u8]) -> Result<Catalog, String> {
     let version = value["schema_version"]
         .as_u64()
         .ok_or("目录缺少 schema_version")?;
-    let field = match version {
-        1 => "plugins",
-        2 => "extensions",
-        _ => {
-            return Err(format!(
-                "不支持目录 schema_version={version}，需要 1 或 {SCHEMA_VERSION}"
-            ));
-        }
-    };
+    if version != u64::from(SCHEMA_VERSION) {
+        return Err(format!(
+            "不支持目录 schema_version={version}，需要 {SCHEMA_VERSION}"
+        ));
+    }
     if value
         .as_object()
-        .is_none_or(|object| object.len() != 2 || !object.contains_key(field))
+        .is_none_or(|object| object.len() != 2 || !object.contains_key("extensions"))
     {
         return Err("目录包含未知字段或缺少条目".into());
     }
-    let entries = value[field].as_array().ok_or("目录条目必须是数组")?;
-    if entries.iter().any(|entry| {
-        if version == 1 {
-            entry.get("kind").is_some()
-        } else {
-            entry.get("kind").is_none()
-        }
-    }) {
-        return Err("目录类型字段与 schema_version 不匹配".into());
+    let entries = value["extensions"].as_array().ok_or("目录条目必须是数组")?;
+    if entries.iter().any(|entry| entry.get("kind").is_none()) {
+        return Err("扩展条目缺少 kind 字段".into());
     }
     let catalog = Catalog {
-        schema_version: version as u32,
         plugins: entries
             .iter()
             .cloned()
@@ -392,7 +380,8 @@ mod tests {
     fn catalog_value() -> serde_json::Value {
         serde_json::json!({
             "schema_version": 1,
-            "plugins": [{
+            "extensions": [{
+                "kind": "plugin",
                 "id": "demo-adapter",
                 "name": "Demo Adapter",
                 "version": "0.1.0",
@@ -410,13 +399,13 @@ mod tests {
     }
 
     #[test]
-    fn versioned_catalog_keeps_kinds_distinct_and_cache_round_trips() {
-        let entry = catalog_value()["plugins"][0].clone();
+    fn catalog_keeps_kinds_distinct_and_cache_round_trips() {
+        let entry = catalog_value()["extensions"][0].clone();
         let mut plugin = entry.clone();
         plugin["kind"] = serde_json::json!("plugin");
         let mut adapter = entry;
         adapter["kind"] = serde_json::json!("adapter");
-        let value = serde_json::json!({"schema_version":2,"extensions":[plugin.clone(),adapter]});
+        let value = serde_json::json!({"schema_version":1,"extensions":[plugin.clone(),adapter]});
         let parsed = parse_value(&value).unwrap();
         assert_eq!(parsed.plugins.len(), 2);
         assert_eq!(
@@ -426,15 +415,25 @@ mod tests {
                 .len(),
             2
         );
-        let v1 = serde_json::json!({"schema_version":1,"plugins":[plugin]});
-        assert!(parse_value(&v1).is_err());
-        let cached = parse_value(&catalog_value()).unwrap();
-        assert!(parse_catalog(&serde_json::to_vec(&cached).unwrap()).is_ok());
+        let missing_kind = serde_json::json!({
+            "schema_version": 1,
+            "extensions": [{
+                "id": "demo",
+                "name": "Demo",
+                "version": "0.1.0",
+                "description": "Demo",
+                "author": "example",
+                "repo": "https://github.com/example/demo.git",
+                "commit": "0123456789abcdef0123456789abcdef01234567"
+            }]
+        });
+        assert!(parse_value(&missing_kind).is_err());
     }
     #[test]
     fn catalog_requires_supported_schema_and_complete_release_metadata() {
         assert!(parse_value(&catalog_value()).is_ok());
         for field in [
+            "kind",
             "id",
             "name",
             "version",
@@ -444,7 +443,10 @@ mod tests {
             "commit",
         ] {
             let mut value = catalog_value();
-            value["plugins"][0].as_object_mut().unwrap().remove(field);
+            value["extensions"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
             assert!(parse_value(&value).is_err(), "missing {field}");
         }
         let mut value = catalog_value();
@@ -454,7 +456,7 @@ mod tests {
         value["unrecognized"] = true.into();
         assert!(parse_value(&value).is_err());
         value = catalog_value();
-        value["plugins"][0]["unrecognized"] = true.into();
+        value["extensions"][0]["unrecognized"] = true.into();
         assert!(parse_value(&value).is_err());
     }
 
@@ -471,14 +473,14 @@ mod tests {
             ("commit", "0123456789abcdef0123456789abcdef0123456g"),
         ] {
             let mut value = catalog_value();
-            value["plugins"][0][field] = invalid.into();
+            value["extensions"][0][field] = invalid.into();
             assert!(parse_value(&value).is_err(), "accepted {field}={invalid}");
         }
         let mut value = catalog_value();
-        let duplicate = value["plugins"][0].clone();
-        value["plugins"].as_array_mut().unwrap().push(duplicate);
+        let duplicate = value["extensions"][0].clone();
+        value["extensions"].as_array_mut().unwrap().push(duplicate);
         assert!(parse_value(&value).is_err());
-        value["plugins"][1]["id"] = "Demo-Adapter".into();
+        value["extensions"][1]["id"] = "Demo-Adapter".into();
         assert!(parse_value(&value).is_err());
     }
 

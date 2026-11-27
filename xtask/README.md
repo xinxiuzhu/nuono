@@ -9,7 +9,7 @@
 | `cargo xtask source-startup` | 插件与适配器安装组合、重编译、单程序导出与重启验证 |
 | `cargo xtask source-startup --profile release` | 使用 release 构建配置检查源码与二进制启动 |
 | `cargo xtask registry validate` | 校验 `registry/entries/` 下的全部扩展登记 |
-| `cargo xtask registry build --out <目录>` | 生成 `extensions-v2.json` 与 `catalog.json` |
+| `cargo xtask registry build --out <目录>` | 生成 `extensions.json` 扩展目录 |
 | `cargo xtask registry import-issue --issue-body-file <文件>` | 解析并写入审核通过的扩展提交 Issue |
 
 `NUONO_CARGO_OFFLINE=1` 可让需要嵌套构建的检查使用已缓存的依赖，`CARGO_NET_OFFLINE=true` 可让整个 Cargo 调用离线。

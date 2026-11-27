@@ -6,7 +6,7 @@
 
 1. 在本仓库使用「**提交插件或适配器**」Issue 模板填写公开 GitHub 仓库地址（展示名称与简介可选）。
 2. 维护者审核源码确认无误后，为该 Issue 添加 `extension:approved` 标签。
-3. GitHub Actions（[.github/workflows/extension-catalog.yml](../.github/workflows/extension-catalog.yml)）会自动拉取仓库并从 `Cargo.toml` 提取扩展类型、ID、版本号、作者、开源协议与最新提交，写入 `registry/entries/`，并生成 `extensions-v2.json` 与 `catalog.json` 发布到本仓库的 `catalog` 分支。
+3. GitHub Actions（[.github/workflows/extension-catalog.yml](../.github/workflows/extension-catalog.yml)）会自动拉取仓库并从 `Cargo.toml` 提取扩展类型、ID、版本号、作者、开源协议与最新提交，写入 `registry/entries/`，并生成 `extensions.json` 发布到本仓库的 `catalog` 分支。
 4. 扩展仓库后续推送新版本后，定时任务也会自动同步最新版本号与提交到商店目录，无需重复提交。
 
 ## 登记条目格式

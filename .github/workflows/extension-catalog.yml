@@ -80,9 +80,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout --orphan catalog-publish
           git rm -rf . >/dev/null 2>&1 || true
-          cp /tmp/nuono-catalog/extensions-v2.json extensions-v2.json
-          cp /tmp/nuono-catalog/catalog.json catalog.json
-          git add extensions-v2.json catalog.json
+          cp /tmp/nuono-catalog/extensions.json extensions.json
+          git add extensions.json
           git commit -m "chore(catalog): publish from ${SOURCE_SHA}"
           git push --force origin HEAD:refs/heads/catalog
 
@@ -92,5 +91,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          gh issue comment "$ISSUE_NUMBER" --body "已审核并发布到官方扩展目录（\`catalog/extensions-v2.json\`）。"
+          gh issue comment "$ISSUE_NUMBER" --body "已审核并发布到官方扩展目录（\`catalog/extensions.json\`）。"
           gh issue close "$ISSUE_NUMBER" --reason completed

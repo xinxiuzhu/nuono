@@ -31,7 +31,7 @@ enum Task {
 enum RegistryAction {
     /// 校验 registry/entries/ 下的所有扩展条目。
     Validate,
-    /// 生成 extensions-v2.json 和 catalog.json 到 --out 指定目录。
+    /// 生成 extensions.json 到 --out 指定目录。
     Build {
         #[arg(long)]
         out: PathBuf,

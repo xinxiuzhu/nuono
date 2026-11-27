@@ -468,30 +468,16 @@ fn resolve_entry_from_source(entry: &RegistryEntry, clone_source: &str) -> Resul
     Ok(resolved)
 }
 
-fn render_catalog(entries: &[CatalogEntry], v2: bool) -> Result<Value> {
-    let mut items = Vec::new();
+fn render_catalog(entries: &[CatalogEntry]) -> Result<Value> {
+    let mut items = Vec::with_capacity(entries.len());
     for entry in entries {
-        if !v2 && entry.kind != ExtensionKind::Plugin {
-            continue;
-        }
         entry.validate()?;
-        let mut value = serde_json::to_value(entry)?;
-        if !v2 && let Some(map) = value.as_object_mut() {
-            map.remove("kind");
-        }
-        items.push(value);
+        items.push(serde_json::to_value(entry)?);
     }
-    let catalog = if v2 {
-        json!({
-            "schema_version": 2,
-            "extensions": items,
-        })
-    } else {
-        json!({
-            "schema_version": 1,
-            "plugins": items,
-        })
-    };
+    let catalog = json!({
+        "schema_version": 1,
+        "extensions": items,
+    });
     ensure!(
         serde_json::to_string_pretty(&catalog)?.len() < MAX_CATALOG_BYTES,
         "生成的扩展目录超过 2 MiB 上限"
@@ -531,16 +517,11 @@ where
         resolved.push(item);
     }
     resolved.sort_by(|a, b| (a.kind, &a.id).cmp(&(b.kind, &b.id)));
-    let v2 = render_catalog(&resolved, true)?;
-    let v1 = render_catalog(&resolved, false)?;
+    let catalog = render_catalog(&resolved)?;
     fs::create_dir_all(out_dir)?;
     fs::write(
-        out_dir.join("extensions-v2.json"),
-        format!("{}\n", serde_json::to_string_pretty(&v2)?),
-    )?;
-    fs::write(
-        out_dir.join("catalog.json"),
-        format!("{}\n", serde_json::to_string_pretty(&v1)?),
+        out_dir.join("extensions.json"),
+        format!("{}\n", serde_json::to_string_pretty(&catalog)?),
     )?;
     println!(
         "Built extension catalog ({} entries) into {}",
@@ -745,13 +726,13 @@ nuono-adapter = { path = "../../crates/nuono-adapter" }
         .unwrap();
         assert_eq!(count, 2);
 
-        let v2: Value =
-            serde_json::from_str(&fs::read_to_string(out.join("extensions-v2.json")).unwrap())
+        let catalog: Value =
+            serde_json::from_str(&fs::read_to_string(out.join("extensions.json")).unwrap())
                 .unwrap();
-        assert_eq!(v2["schema_version"], 2);
-        assert_eq!(v2["extensions"].as_array().unwrap().len(), 2);
+        assert_eq!(catalog["schema_version"], 1);
+        assert_eq!(catalog["extensions"].as_array().unwrap().len(), 2);
 
-        let p = &v2["extensions"][0];
+        let p = &catalog["extensions"][0];
         assert_eq!(p["kind"], "plugin");
         assert_eq!(p["id"], "demo-plugin");
         assert_eq!(p["name"], "demo-plugin");
@@ -763,19 +744,14 @@ nuono-adapter = { path = "../../crates/nuono-adapter" }
         assert_eq!(p["repo"], "https://github.com/alice/demo-plugin.git");
         assert!(p.get("nuono_version").is_none());
 
-        let a = &v2["extensions"][1];
+        let a = &catalog["extensions"][1];
         assert_eq!(a["kind"], "adapter");
         assert_eq!(a["id"], "onebot");
         assert_eq!(a["name"], "OneBot 适配器");
         assert_eq!(a["author"], "bob");
         assert_eq!(a["description"], "连接 OneBot v11 协议端");
         assert_eq!(a["commit"], adapter_sha);
-
-        let v1: Value =
-            serde_json::from_str(&fs::read_to_string(out.join("catalog.json")).unwrap()).unwrap();
-        assert_eq!(v1["schema_version"], 1);
-        assert_eq!(v1["plugins"].as_array().unwrap().len(), 1);
-        assert!(v1["plugins"][0].get("kind").is_none());
+        assert!(!out.join("catalog.json").exists());
     }
 
     #[test]
