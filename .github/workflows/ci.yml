@@ -25,7 +25,7 @@ jobs:
     name: Rust development tools
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Keep repository tooling in Rust
         # 仅保留现有的字体子集生成脚本用于更新仓库内字体资源；
         # 构建与测试编排统一使用 Rust，不再引入其他 Python 工具。
@@ -44,7 +44,7 @@ jobs:
     name: Application contracts
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
@@ -56,7 +56,7 @@ jobs:
     name: Domain contracts
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
@@ -67,7 +67,7 @@ jobs:
     name: Rustfmt
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
@@ -78,7 +78,7 @@ jobs:
     name: Clippy (Rust 1.100.0)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
@@ -113,7 +113,7 @@ jobs:
       # 版本对齐：runner 自带 PG16 客户端会拒绝 dump PG18 服务器；备份测试需要 pg_dump 18。
       NUONO_TEST_PG_CLIENT_BIN: /usr/lib/postgresql/18/bin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
@@ -144,7 +144,7 @@ jobs:
       # 测试基建按该变量把 test_db 全量切到 SQLite（无需数据库服务），双后端都不跳过。
       NUONO_TEST_DATABASE_BACKEND: sqlite
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
@@ -167,7 +167,7 @@ jobs:
         os: [ubuntu-24.04, macos-15, windows-2022]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
@@ -198,7 +198,7 @@ jobs:
     env:
       RUSTDOCFLAGS: -D warnings
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
