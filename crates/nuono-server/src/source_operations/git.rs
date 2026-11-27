@@ -390,17 +390,13 @@ async fn local_published_plugin(
     cfg: &nuono_core::config::PluginStoreConfig,
 ) -> Result<Option<StorePlugin>, String> {
     let root = store_root()?;
-    let remote = if let Some(url) = cfg.index_url.as_deref() {
-        let cached = crate::plugin_catalog::cached_plugins(&root, url)
-            .await?
-            .ok_or("商店发布记录尚未缓存，请先刷新商店目录")?;
-        cached
-            .into_iter()
-            .find(|p| super::source_key(p.kind, &p.id) == id)
-            .map(StorePlugin::from)
-    } else {
-        None
-    };
+    let cached = crate::plugin_catalog::cached_plugins(&root, cfg.effective_index_url())
+        .await?
+        .ok_or("商店发布记录尚未缓存，请先刷新商店目录")?;
+    let remote = cached
+        .into_iter()
+        .find(|p| super::source_key(p.kind, &p.id) == id)
+        .map(StorePlugin::from);
     let (kind, raw_id) = super::parse_source_key(id)?;
     let local = if kind == source_build::SourceKind::Plugin {
         read_store_plugin(&root.join("plugins_store").join(&raw_id), &raw_id)?

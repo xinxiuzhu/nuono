@@ -130,7 +130,9 @@ pub(crate) async fn save_settings(
     body: StoreSettingsBody,
 ) -> nuono_core::error::Result<()> {
     let index_url = body.index_url.trim().to_string();
-    let index_url = (!index_url.is_empty()).then_some(index_url);
+    let index_url = (!index_url.is_empty()
+        && index_url != nuono_core::config::OFFICIAL_PLUGIN_STORE_INDEX_URL)
+        .then_some(index_url);
     let patch = nuono_core::db::RuntimeConfigPatch {
         settings: serde_json::json!({"plugin_store": {
             "index_url": index_url,
@@ -194,16 +196,15 @@ pub(crate) async fn store_catalog(
         stale: false,
         warning: None,
     };
-    if let Some(url) = cfg.index_url.as_deref() {
-        let snapshot = crate::plugin_catalog::load_remote(&root, url, force).await?;
-        view.plugins = snapshot
-            .plugins
-            .into_iter()
-            .map(StorePlugin::from)
-            .collect();
-        view.stale = snapshot.stale;
-        view.warning = snapshot.warning;
-    }
+    let snapshot =
+        crate::plugin_catalog::load_remote(&root, cfg.effective_index_url(), force).await?;
+    view.plugins = snapshot
+        .plugins
+        .into_iter()
+        .map(StorePlugin::from)
+        .collect();
+    view.stale = snapshot.stale;
+    view.warning = snapshot.warning;
     tokio::task::spawn_blocking(move || {
         let directory = root.join("plugins_store");
         if directory.is_dir() {

@@ -44,9 +44,17 @@ pub struct InstallBody {
 )]
 async fn settings(State(state): State<AppState>) -> crate::api::ApiReply<StoreSettingsBody> {
     let cfg = state.config.snapshot().await;
-    ApiResponse::ok(StoreSettingsBody {
-        index_url: cfg.plugin_store.index_url.clone().unwrap_or_default(),
-    })
+    let index_url = cfg
+        .plugin_store
+        .index_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| {
+            !url.is_empty() && *url != nuono_core::config::OFFICIAL_PLUGIN_STORE_INDEX_URL
+        })
+        .unwrap_or_default()
+        .to_string();
+    ApiResponse::ok(StoreSettingsBody { index_url })
 }
 
 #[utoipa::path(

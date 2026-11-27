@@ -372,25 +372,24 @@ fn default_audit_retention_days() -> u64 {
 }
 
 /// 插件商店目录来源配置。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PluginStoreConfig {
-    /// 缺省使用官方索引；显式 null 保留为仅使用本地清单。
-    #[serde(default = "default_plugin_store_index_url")]
+    /// 自定义目录地址；留空时自动使用官方默认目录。
+    #[serde(default)]
     pub index_url: Option<String>,
 }
 
 pub const OFFICIAL_PLUGIN_STORE_INDEX_URL: &str =
     "https://raw.githubusercontent.com/xinxiuzhu/nuono/catalog/extensions.json";
 
-fn default_plugin_store_index_url() -> Option<String> {
-    Some(OFFICIAL_PLUGIN_STORE_INDEX_URL.to_string())
-}
-
-impl Default for PluginStoreConfig {
-    fn default() -> Self {
-        Self {
-            index_url: default_plugin_store_index_url(),
-        }
+impl PluginStoreConfig {
+    /// 返回实际生效的目录地址：未配置自定义地址时回退到官方默认目录。
+    pub fn effective_index_url(&self) -> &str {
+        self.index_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .unwrap_or(OFFICIAL_PLUGIN_STORE_INDEX_URL)
     }
 }
 
@@ -1887,23 +1886,36 @@ mod tests {
     fn plugin_store_defaults_to_official_without_overriding_explicit_sources() {
         let default = PluginStoreConfig::default();
         let missing: PluginStoreConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(default.index_url, None);
         assert_eq!(
-            default.index_url.as_deref(),
-            Some(OFFICIAL_PLUGIN_STORE_INDEX_URL)
+            default.effective_index_url(),
+            OFFICIAL_PLUGIN_STORE_INDEX_URL
         );
-        assert_eq!(missing.index_url, default.index_url);
+        assert_eq!(missing.index_url, None);
+        assert_eq!(
+            missing.effective_index_url(),
+            OFFICIAL_PLUGIN_STORE_INDEX_URL
+        );
 
-        let disabled: PluginStoreConfig = serde_json::from_str(r#"{"index_url":null}"#).unwrap();
-        assert_eq!(disabled.index_url, None);
+        let cleared: PluginStoreConfig = serde_json::from_str(r#"{"index_url":null}"#).unwrap();
+        assert_eq!(cleared.index_url, None);
+        assert_eq!(
+            cleared.effective_index_url(),
+            OFFICIAL_PLUGIN_STORE_INDEX_URL
+        );
         let round_trip: PluginStoreConfig =
-            serde_json::from_value(serde_json::to_value(disabled).unwrap()).unwrap();
+            serde_json::from_value(serde_json::to_value(cleared).unwrap()).unwrap();
         assert_eq!(round_trip.index_url, None);
 
         let custom: PluginStoreConfig =
-            serde_json::from_str(r#"{"index_url":"https://example.com/catalog.json"}"#).unwrap();
+            serde_json::from_str(r#"{"index_url":"https://example.com/extensions.json"}"#).unwrap();
         assert_eq!(
             custom.index_url.as_deref(),
-            Some("https://example.com/catalog.json")
+            Some("https://example.com/extensions.json")
+        );
+        assert_eq!(
+            custom.effective_index_url(),
+            "https://example.com/extensions.json"
         );
     }
 
