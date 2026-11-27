@@ -392,6 +392,25 @@ async fn concurrent_interruption_and_completion_have_one_cas_winner() {
 }
 
 #[tokio::test]
+async fn stale_cas_against_terminal_run_returns_false_while_current_revision_conflicts() {
+    let db = crate::test_support::test_db(2).await;
+    seed(&db, &[("root", None, "waiting_children")]).await;
+    let completed = run("root", None, "completed");
+    assert!(db.update_agent_run(completed, 0).await.unwrap());
+
+    // 落后收集器携带旧版本号 0 尝试切回 running，应按普通 CAS 失配返回 Ok(false)。
+    let stale_resume = run("root", None, "running");
+    assert!(!db.update_agent_run(stale_resume.clone(), 0).await.unwrap());
+
+    // 携带最新版本号 1 显式尝试把终态检查点重新置回 running，仍必须返回 Conflict。
+    assert!(matches!(
+        db.update_agent_run(stale_resume, 1).await,
+        Err(nuono_error::NuonoError::Conflict(_))
+    ));
+    db.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn malformed_checkpoint_is_preserved_and_reason_is_retained_in_transactional_audit() {
     let db = crate::test_support::test_db(2).await;
     let mut malformed = run("root", None, "running");

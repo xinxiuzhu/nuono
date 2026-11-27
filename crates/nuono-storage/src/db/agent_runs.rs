@@ -61,6 +61,11 @@ impl Database {
             return Ok(false);
         };
         super::account_state::lock_private_account_on(&tx, &saved.session_id).await?;
+        // 先校验 CAS 版本号：落后写入者在领先者已提交终态后才到达时，属于正常的乐观锁失配，
+        // 应返回 Ok(false) 让调用方退让，而不是误报「已结束的检查点不能重入执行态」。
+        if saved.revision != expected_revision {
+            return Ok(false);
+        }
         if !matches!(
             saved.status.as_str(),
             "queued" | "running" | "waiting_approval" | "waiting_children"
