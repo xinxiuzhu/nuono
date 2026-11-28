@@ -196,7 +196,8 @@ fn artifact_is_applied_by_binary(
         return job_is_applied(job, running);
     }
     publication.is_some_and(|publication| {
-        running_sha256 == Some(publication.artifact.sha256.as_str())
+        !publication.deferred_binary
+            && running_sha256 == Some(publication.artifact.sha256.as_str())
             && source_build::same_sources(running, &publication.artifact.sources)
             && job_is_applied(job, running)
     })
@@ -831,7 +832,7 @@ async fn run_job(
     job.artifact = Some(artifact.clone());
     persist(&directory, job)?;
     let publication = source_build::prepare_job_candidate(root, &artifact, &job.id, &build_lock)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("{e:#}"))?;
     let restart_message = if job.operation == "uninstall" {
         "卸载部署已完成，等待重启后生效（可继续调整其他插件后统一重启）；配置文件、密钥及业务数据保留"
     } else {
@@ -839,7 +840,7 @@ async fn run_job(
     };
     phase(&directory, job, "awaiting_restart", restart_message)?;
     source_build::complete_job_candidate(root, &publication, &build_lock)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("{e:#}"))?;
     if job.kind == SourceKind::Adapter && job.operation == "uninstall" {
         state
             .bot_instances
@@ -1191,6 +1192,14 @@ mod tests {
         other.artifact.as_mut().unwrap().sha256 = "b".repeat(64);
         assert!(!publication_authorized(&publication, &[other]));
         assert!(!publication_authorized(&publication, &[]));
+        let mut deferred = publication;
+        deferred.deferred_binary = true;
+        assert!(!artifact_is_applied_by_binary(
+            &selected,
+            &[],
+            Some(&deferred),
+            Some(&deferred.artifact.sha256)
+        ));
         fs::remove_dir_all(root).unwrap();
     }
 

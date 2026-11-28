@@ -21,6 +21,10 @@ pub struct Publication {
     pub job_id: Option<String>,
     previous_sha256: Option<String>,
     previous_receipt: bool,
+    /// 公开程序入口正被运行中进程占用（典型场景为 Windows 替换 `.exe`）时置为 `true`，
+    /// 表示已冻结并校验新候选产物，待旧进程退出后由源码启动器写入公开入口。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deferred_binary: bool,
 }
 
 /// 单次构建流程内的已校验候选产物凭据，仅在当前进程内有效，绝不落盘或跨进程继承。
@@ -39,6 +43,11 @@ impl ValidatedCandidate {
     }
     pub fn is_reused(&self) -> bool {
         self.reused_publication.is_some()
+    }
+    pub fn is_deferred_reuse(&self) -> bool {
+        self.reused_publication
+            .as_ref()
+            .is_some_and(|publication| publication.deferred_binary)
     }
 }
 
@@ -160,12 +169,54 @@ fn copy_atomic(source: &Path, destination: &Path) -> Result<()> {
     copy_atomic_hashed(source, destination, None).map(|_| ())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplaceMode {
+    Immediate,
+    AllowLockedDestination,
+    #[cfg(test)]
+    SimulateLockedDestination,
+}
+
+enum CopyOutcome {
+    Replaced(String),
+    LockedDestination(std::io::Error),
+}
+
+fn is_locked_binary_error_parts(kind: std::io::ErrorKind, raw_os_error: Option<i32>) -> bool {
+    #[cfg(windows)]
+    {
+        // Windows 替换正在运行的可执行文件时会返回拒绝访问（5）或共享冲突（32）。
+        kind == std::io::ErrorKind::PermissionDenied || matches!(raw_os_error, Some(5 | 32))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (kind, raw_os_error);
+        false
+    }
+}
+
+fn is_locked_binary_io_error(error: &std::io::Error) -> bool {
+    is_locked_binary_error_parts(error.kind(), error.raw_os_error())
+}
+
 /// 边复制边计算实际写入字节的 SHA-256 哈希；若复制期间源文件发生变化或与期望哈希不符，则直接中止并保留原目标文件不变。
 pub fn copy_atomic_hashed(
     source: &Path,
     destination: &Path,
     expected: Option<&str>,
 ) -> Result<String> {
+    match copy_atomic_hashed_with_mode(source, destination, expected, ReplaceMode::Immediate)? {
+        CopyOutcome::Replaced(sha256) => Ok(sha256),
+        CopyOutcome::LockedDestination(error) => Err(error.into()),
+    }
+}
+
+fn copy_atomic_hashed_with_mode(
+    source: &Path,
+    destination: &Path,
+    expected: Option<&str>,
+    mode: ReplaceMode,
+) -> Result<CopyOutcome> {
     let parent = destination.parent().context("缺少产物目录")?;
     let parent = if parent.as_os_str().is_empty() {
         Path::new(".")
@@ -174,7 +225,7 @@ pub fn copy_atomic_hashed(
     };
     fs::create_dir_all(parent)?;
     let temporary = parent.join(format!(".application-{}", uuid::Uuid::new_v4()));
-    let result = (|| {
+    let result = (|| -> Result<CopyOutcome> {
         ensure!(
             fs::symlink_metadata(source)?.file_type().is_file(),
             "待复制程序不是普通文件"
@@ -209,11 +260,29 @@ pub fn copy_atomic_hashed(
         );
         fs::set_permissions(&temporary, permissions)?;
         writer.sync_all()?;
-        fs::rename(&temporary, destination)?;
-        sync_directory(parent)?;
-        Ok(sha256)
+        drop(writer);
+        #[cfg(test)]
+        if mode == ReplaceMode::SimulateLockedDestination {
+            return Ok(CopyOutcome::LockedDestination(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "模拟运行中程序被占用",
+            )));
+        }
+        match fs::rename(&temporary, destination) {
+            Ok(()) => {
+                sync_directory(parent)?;
+                Ok(CopyOutcome::Replaced(sha256))
+            }
+            Err(error)
+                if mode == ReplaceMode::AllowLockedDestination
+                    && is_locked_binary_io_error(&error) =>
+            {
+                Ok(CopyOutcome::LockedDestination(error))
+            }
+            Err(error) => Err(error.into()),
+        }
     })();
-    if result.is_err() {
+    if !matches!(result, Ok(CopyOutcome::Replaced(_))) {
         let _ = fs::remove_file(temporary);
     }
     result
@@ -346,28 +415,95 @@ fn remove_journal(target: &Path, profile: &str) -> Result<()> {
     }
     Ok(())
 }
-fn complete_publication(target: &Path, publication: &Publication) -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublishPolicy {
+    /// 立即替换公开程序入口（用于启动器构建与启动前故障恢复）。
+    Immediate,
+    /// 若公开程序入口正被运行中进程占用，则记录延迟发布回执，待重启后由启动器写入。
+    DeferIfLocked,
+    #[cfg(test)]
+    SimulateLocked,
+}
+
+impl PublishPolicy {
+    fn replace_mode(self) -> ReplaceMode {
+        match self {
+            Self::Immediate => ReplaceMode::Immediate,
+            Self::DeferIfLocked => ReplaceMode::AllowLockedDestination,
+            #[cfg(test)]
+            Self::SimulateLocked => ReplaceMode::SimulateLockedDestination,
+        }
+    }
+}
+
+fn can_defer_locked_publication(binary: &Path, publication: &Publication) -> Result<bool> {
+    let Some(previous) = publication.previous_sha256.as_deref() else {
+        return Ok(false);
+    };
+    if !binary.exists() || !fs::symlink_metadata(binary)?.file_type().is_file() {
+        return Ok(false);
+    }
+    Ok(hash_file(binary)? == previous)
+}
+
+fn complete_publication_with_policy(
+    target: &Path,
+    publication: &Publication,
+    policy: PublishPolicy,
+) -> Result<()> {
     verify_candidate(target, &publication.artifact)?;
-    complete_verified_publication(target, publication)
+    complete_verified_publication_with_policy(target, publication, policy)
 }
 
 /// 仅在当前操作已完成候选产物校验后调用；复制过程中仍会严格核对输入文件的 SHA-256。
-fn complete_verified_publication(target: &Path, publication: &Publication) -> Result<()> {
-    copy_atomic_hashed(
+fn complete_verified_publication_with_policy(
+    target: &Path,
+    publication: &Publication,
+    policy: PublishPolicy,
+) -> Result<()> {
+    let binary = public_binary(target, &publication.artifact.profile)?;
+    match copy_atomic_hashed_with_mode(
         &candidate_path(target, &publication.artifact)?,
-        &public_binary(target, &publication.artifact.profile)?,
+        &binary,
         Some(&publication.artifact.sha256),
-    )?;
-    durable_json(
-        &receipt_path(target, &publication.artifact.profile)?,
-        publication,
-    )?;
+        policy.replace_mode(),
+    )? {
+        CopyOutcome::Replaced(_) => {
+            let mut published = publication.clone();
+            published.deferred_binary = false;
+            durable_json(
+                &receipt_path(target, &published.artifact.profile)?,
+                &published,
+            )?;
+        }
+        CopyOutcome::LockedDestination(lock_error) => {
+            if !can_defer_locked_publication(&binary, publication)? {
+                return Err(lock_error.into());
+            }
+            let mut deferred = publication.clone();
+            deferred.deferred_binary = true;
+            durable_json(
+                &artifact_directory(target, &deferred.artifact)?.join("publication.json"),
+                &deferred,
+            )?;
+            durable_json(
+                &receipt_path(target, &deferred.artifact.profile)?,
+                &deferred,
+            )?;
+            tracing::info!(
+                artifact_id = %deferred.artifact.id,
+                profile = %deferred.artifact.profile,
+                "当前应用正在运行，已记录延迟发布回执，将在下次启动时写入应用入口"
+            );
+        }
+    }
     if let Err(error) = remove_journal(target, &publication.artifact.profile) {
         // 写入 published-*.json 回执即代表事务已提交成功；残留的 publishing-*.json 日志可在下次启动维护时安全清理。
         tracing::warn!(%error, "程序已提交，发布日志将在下次维护时恢复");
     }
     Ok(())
 }
+
 fn restore_publication(target: &Path, publication: &Publication) -> Result<()> {
     let artifact = &publication.artifact;
     let binary = public_binary(target, &artifact.profile)?;
@@ -378,12 +514,15 @@ fn restore_publication(target: &Path, publication: &Publication) -> Result<()> {
         "公开程序已被其他操作修改，已保留该文件"
     );
     let directory = artifact_directory(target, artifact)?;
-    if let Some(previous) = &publication.previous_sha256 {
-        let backup = directory.join("previous-application");
-        copy_atomic_hashed(&backup, &binary, Some(previous)).context("旧程序备份校验失败")?;
-    } else if binary.exists() {
-        fs::remove_file(&binary)?;
-        sync_directory(binary.parent().unwrap())?;
+    // 若公开程序仍与发布前摘要完全一致，说明入口尚未被覆盖，无需重复写回（避免在 Windows 上再次撞上运行中文件锁）。
+    if actual != publication.previous_sha256 {
+        if let Some(previous) = &publication.previous_sha256 {
+            let backup = directory.join("previous-application");
+            copy_atomic_hashed(&backup, &binary, Some(previous)).context("旧程序备份校验失败")?;
+        } else if binary.exists() {
+            fs::remove_file(&binary)?;
+            sync_directory(binary.parent().context("缺少公开程序目录")?)?;
+        }
     }
     let receipt = receipt_path(target, &artifact.profile)?;
     if publication.previous_receipt {
@@ -391,7 +530,7 @@ fn restore_publication(target: &Path, publication: &Publication) -> Result<()> {
         durable_json(&receipt, &previous)?;
     } else if receipt.exists() {
         fs::remove_file(&receipt)?;
-        sync_directory(receipt.parent().unwrap())?;
+        sync_directory(receipt.parent().context("缺少发布回执目录")?)?;
     }
     remove_journal(target, &artifact.profile)
 }
@@ -444,19 +583,45 @@ fn prepare_verified_publication(
         job_id: job_id.map(str::to_string),
         previous_sha256,
         previous_receipt: previous_receipt.is_some(),
+        deferred_binary: false,
     };
     durable_json(&directory.join("publication.json"), &publication)?;
     durable_json(&journal_path(target, &artifact.profile)?, &publication)?;
     Ok(publication)
 }
-pub fn finish_publication(target: &Path, publication: &Publication) -> Result<PathBuf> {
-    if let Err(error) = complete_publication(target, publication) {
-        return match restore_publication(target, publication) {
-            Ok(()) => Err(error.context("发布失败，已恢复原有程序")),
-            Err(recovery) => Err(error.context(format!("发布失败，恢复程序失败: {recovery:#}"))),
-        };
+
+fn wrap_publish_failure(
+    target: &Path,
+    publication: &Publication,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    match restore_publication(target, publication) {
+        Ok(()) => error.context("发布失败，已恢复原有程序"),
+        Err(recovery) => {
+            anyhow::anyhow!("发布失败（{error:#}），且恢复程序失败：{recovery:#}")
+        }
+    }
+}
+
+fn finish_publication_with_policy(
+    target: &Path,
+    publication: &Publication,
+    policy: PublishPolicy,
+) -> Result<PathBuf> {
+    if let Err(error) = complete_publication_with_policy(target, publication, policy) {
+        return Err(wrap_publish_failure(target, publication, error));
     }
     public_binary(target, &publication.artifact.profile)
+}
+
+#[cfg(test)]
+pub fn finish_publication(target: &Path, publication: &Publication) -> Result<PathBuf> {
+    finish_publication_with_policy(target, publication, PublishPolicy::Immediate)
+}
+
+/// 完成后台插件/适配器任务的产物发布；若运行中的公开程序入口被操作系统锁定，则自动转为延迟发布。
+pub fn finish_job_publication(target: &Path, publication: &Publication) -> Result<PathBuf> {
+    finish_publication_with_policy(target, publication, PublishPolicy::DeferIfLocked)
 }
 
 /// 消费进程内的 `ValidatedCandidate` 凭据并发布产物。
@@ -481,10 +646,15 @@ pub fn publish_validated_candidate(
             same_artifact(&publication.artifact, &artifact)
                 && publication.job_id == previous.job_id
                 && publication.previous_sha256 == previous.previous_sha256
-                && publication.previous_receipt == previous.previous_receipt,
+                && publication.previous_receipt == previous.previous_receipt
+                && publication.deferred_binary == previous.deferred_binary,
             "已验证的发布凭据已变化，未复用程序"
         );
-        verify_public_binary(target, &artifact)?;
+        if publication.deferred_binary {
+            materialize_deferred_publication(target, &publication)?;
+        } else {
+            verify_public_binary(target, &artifact)?;
+        }
         return public_binary(target, &artifact.profile);
     }
     let publication = prepare_verified_publication(target, &artifact, job_id)?;
@@ -504,11 +674,10 @@ pub fn export_validated_candidate(
 }
 
 fn finish_verified_publication(target: &Path, publication: &Publication) -> Result<PathBuf> {
-    if let Err(error) = complete_verified_publication(target, publication) {
-        return match restore_publication(target, publication) {
-            Ok(()) => Err(error.context("发布失败，已恢复原有程序")),
-            Err(recovery) => Err(error.context(format!("发布失败，恢复程序失败: {recovery:#}"))),
-        };
+    if let Err(error) =
+        complete_verified_publication_with_policy(target, publication, PublishPolicy::Immediate)
+    {
+        return Err(wrap_publish_failure(target, publication, error));
     }
     public_binary(target, &publication.artifact.profile)
 }
@@ -533,7 +702,11 @@ pub fn publish_candidate(
         if publication.artifact.id != artifact.id {
             verify_candidate(target, &publication.artifact)?;
         }
-        verify_public_binary(target, &publication.artifact)?;
+        if publication.deferred_binary {
+            materialize_deferred_publication(target, &publication)?;
+        } else {
+            verify_public_binary(target, &publication.artifact)?;
+        }
         return public_binary(target, &artifact.profile);
     }
     let publication = prepare_verified_publication(target, artifact, job_id)?;
@@ -553,6 +726,46 @@ fn verify_public_binary(target: &Path, artifact: &BuildArtifact) -> Result<()> {
     Ok(())
 }
 
+/// 校验处于延迟发布状态的公开程序入口：
+/// 允许其仍保持上一版已记录摘要，或已在上次中断的落盘过程中写入目标摘要，拒绝其他外部篡改。
+fn verify_deferred_public_binary(target: &Path, publication: &Publication) -> Result<String> {
+    let binary = public_binary(target, &publication.artifact.profile)?;
+    ensure!(
+        fs::symlink_metadata(&binary)?.file_type().is_file(),
+        "公开程序不是普通文件"
+    );
+    let actual = hash_file(&binary)?;
+    ensure!(
+        actual == publication.artifact.sha256
+            || publication.previous_sha256.as_deref() == Some(actual.as_str()),
+        "公开程序与待生效构建记录不一致，已停止重启"
+    );
+    Ok(actual)
+}
+
+/// 在旧应用进程已退出后，将延迟发布的候选产物写入公开程序入口并清除延迟标记。
+fn materialize_deferred_publication(target: &Path, publication: &Publication) -> Result<()> {
+    let actual = verify_deferred_public_binary(target, publication)?;
+    if actual != publication.artifact.sha256 {
+        copy_atomic_hashed(
+            &candidate_path(target, &publication.artifact)?,
+            &public_binary(target, &publication.artifact.profile)?,
+            Some(&publication.artifact.sha256),
+        )?;
+    }
+    let mut materialized = publication.clone();
+    materialized.deferred_binary = false;
+    durable_json(
+        &artifact_directory(target, &materialized.artifact)?.join("publication.json"),
+        &materialized,
+    )?;
+    durable_json(
+        &receipt_path(target, &materialized.artifact.profile)?,
+        &materialized,
+    )?;
+    verify_public_binary(target, &materialized.artifact)
+}
+
 pub fn verify_publication(
     target: &Path,
     publication: &Publication,
@@ -563,7 +776,12 @@ pub fn verify_publication(
         same_sources(sources, &publication.artifact.sources),
         "全部插件源码与已发布构建不一致，请重新构建后再重启"
     );
-    verify_public_binary(target, &publication.artifact)
+    if publication.deferred_binary {
+        verify_deferred_public_binary(target, publication)?;
+        Ok(())
+    } else {
+        verify_public_binary(target, &publication.artifact)
+    }
 }
 
 /// 恢复未完成的发布事务日志：仅当对应的持久化任务记录仍处于已授权状态时才继续完成发布，否则回滚到上一版程序。
@@ -591,7 +809,7 @@ pub fn recover_publications(target: &Path, authorize: impl Fn(&Publication) -> b
             "公开程序已经变化，发布恢复不会覆盖它"
         );
         if authorize(&publication) {
-            complete_publication(target, &publication)?;
+            complete_publication_with_policy(target, &publication, PublishPolicy::Immediate)?;
         } else {
             restore_publication(target, &publication)?;
         }

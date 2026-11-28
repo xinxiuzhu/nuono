@@ -610,3 +610,209 @@ fn rollback_rejects_a_tampered_backup_without_overwriting_the_current_program() 
         &current
     ));
 }
+
+#[test]
+fn locked_binary_defers_publication_supports_batch_updates_and_materializes_on_restart() {
+    let fixture = Fixture::new();
+    let old = fixture.candidate("old program", vec![source("base", "v0")]);
+    publish_candidate(&fixture.target(), &old, None).unwrap();
+
+    // 第一次运行中安装：公开程序被占用，转为延迟发布，不覆盖旧入口且不残留事务日志。
+    let first = fixture.candidate("first program", vec![source("plugin-a", "v1")]);
+    let first_prepared = prepare_publication(&fixture.target(), &first, Some("job-1")).unwrap();
+    finish_publication_with_policy(
+        &fixture.target(),
+        &first_prepared,
+        PublishPolicy::SimulateLocked,
+    )
+    .unwrap();
+    assert_eq!(fixture.public_contents(), "old program");
+    assert!(!journal_path(&fixture.target(), "debug").unwrap().exists());
+    assert!(
+        fs::read_dir(fixture.target().join("debug"))
+            .unwrap()
+            .all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".application-")
+            })
+    );
+    let first_receipt = read_publication(&fixture.target(), "debug")
+        .unwrap()
+        .unwrap();
+    assert!(first_receipt.deferred_binary);
+    assert!(same_artifact(&first_receipt.artifact, &first));
+    verify_publication(&fixture.target(), &first_receipt, &first.sources).unwrap();
+    maintain_artifacts(&fixture.0, &fixture.target()).unwrap();
+    assert!(
+        artifact_directory(&fixture.target(), &first)
+            .unwrap()
+            .exists()
+    );
+    assert!(
+        artifact_directory(&fixture.target(), &old)
+            .unwrap()
+            .exists()
+    );
+
+    // 未重启前继续安装第二个插件：应顺利完成第二次延迟发布，支持批量安装后统一重启。
+    let second = fixture.candidate(
+        "second program",
+        vec![source("plugin-a", "v1"), source("plugin-b", "v2")],
+    );
+    let second_prepared = prepare_publication(&fixture.target(), &second, Some("job-2")).unwrap();
+    finish_publication_with_policy(
+        &fixture.target(),
+        &second_prepared,
+        PublishPolicy::SimulateLocked,
+    )
+    .unwrap();
+    assert_eq!(fixture.public_contents(), "old program");
+    let second_receipt = read_publication(&fixture.target(), "debug")
+        .unwrap()
+        .unwrap();
+    assert!(second_receipt.deferred_binary);
+    assert!(same_artifact(&second_receipt.artifact, &second));
+    verify_publication(&fixture.target(), &second_receipt, &second.sources).unwrap();
+
+    // 回滚第二次延迟发布应直接恢复第一次延迟回执，无需覆写被占用的旧程序入口。
+    rollback_candidate(&fixture.target(), &second).unwrap();
+    assert_eq!(fixture.public_contents(), "old program");
+    let restored_first = read_publication(&fixture.target(), "debug")
+        .unwrap()
+        .unwrap();
+    assert!(restored_first.deferred_binary);
+    assert!(same_artifact(&restored_first.artifact, &first));
+
+    // 重新提交第二次延迟发布，再模拟旧进程退出后的源码启动器接管落盘。
+    let second_retry = fixture.candidate(
+        "second program",
+        vec![source("plugin-a", "v1"), source("plugin-b", "v2")],
+    );
+    let second_retry_prepared =
+        prepare_publication(&fixture.target(), &second_retry, Some("job-2-retry")).unwrap();
+    finish_publication_with_policy(
+        &fixture.target(),
+        &second_retry_prepared,
+        PublishPolicy::SimulateLocked,
+    )
+    .unwrap();
+
+    let restarted =
+        fixture.validated_candidate("second program", second_retry.sources.clone(), true);
+    assert!(restarted.is_reused());
+    assert!(restarted.is_deferred_reuse());
+    publish_validated_candidate(&fixture.target(), restarted, None).unwrap();
+    assert_eq!(fixture.public_contents(), "second program");
+    let materialized = read_publication(&fixture.target(), "debug")
+        .unwrap()
+        .unwrap();
+    assert!(!materialized.deferred_binary);
+    assert!(same_artifact(&materialized.artifact, &second_retry));
+    verify_publication(&fixture.target(), &materialized, &second_retry.sources).unwrap();
+}
+
+#[test]
+fn deferred_publication_rejects_tampering_and_recovers_interrupted_materialization() {
+    let fixture = Fixture::new();
+    let old = fixture.candidate("old program", vec![source("base", "v0")]);
+    publish_candidate(&fixture.target(), &old, None).unwrap();
+    let next = fixture.candidate("next program", vec![source("plugin", "v1")]);
+    let prepared = prepare_publication(&fixture.target(), &next, Some("job-1")).unwrap();
+    finish_publication_with_policy(&fixture.target(), &prepared, PublishPolicy::SimulateLocked)
+        .unwrap();
+
+    // 若公开程序被外部篡改，延迟校验与启动器落盘都必须拒绝，且不得覆盖外部修改。
+    let public = public_binary(&fixture.target(), "debug").unwrap();
+    fs::write(&public, "tampered program").unwrap();
+    let receipt = read_publication(&fixture.target(), "debug")
+        .unwrap()
+        .unwrap();
+    assert!(verify_publication(&fixture.target(), &receipt, &next.sources).is_err());
+    let candidate = fixture.validated_candidate("next program", next.sources.clone(), true);
+    assert!(publish_validated_candidate(&fixture.target(), candidate, None).is_err());
+    assert_eq!(fixture.public_contents(), "tampered program");
+
+    // 若上次启动器在写入新程序后、更新回执前中断，下次启动应幂等地清除延迟标记。
+    fs::write(&public, "next program").unwrap();
+    let candidate = fixture.validated_candidate("next program", next.sources, true);
+    publish_validated_candidate(&fixture.target(), candidate, None).unwrap();
+    let finalized = read_publication(&fixture.target(), "debug")
+        .unwrap()
+        .unwrap();
+    assert!(!finalized.deferred_binary);
+    assert_eq!(fixture.public_contents(), "next program");
+}
+
+#[test]
+fn restore_skips_redundant_overwrite_when_unchanged_and_preserves_both_errors_on_failure() {
+    let fixture = Fixture::new();
+    let old = fixture.candidate("old program", vec![]);
+    publish_candidate(&fixture.target(), &old, None).unwrap();
+    let next = fixture.candidate("next program", vec![]);
+    let prepared = prepare_publication(&fixture.target(), &next, Some("job-1")).unwrap();
+
+    // 公开程序尚未被覆盖时，即使备份不可写或已变化，回滚也无需触碰公开入口，并应清理事务日志。
+    fs::remove_file(
+        artifact_directory(&fixture.target(), &next)
+            .unwrap()
+            .join("previous-application"),
+    )
+    .unwrap();
+    recover_publications(&fixture.target(), |_| false).unwrap();
+    assert_eq!(fixture.public_contents(), "old program");
+    assert!(!journal_path(&fixture.target(), "debug").unwrap().exists());
+    assert!(same_artifact(
+        &read_publication(&fixture.target(), "debug")
+            .unwrap()
+            .unwrap()
+            .artifact,
+        &old
+    ));
+
+    // 当发布与恢复双双失败时，返回错误必须同时保留原始发布原因和恢复失败原因。
+    let broken = fixture.candidate("broken program", vec![]);
+    let broken_prepared =
+        prepare_publication(&fixture.target(), &broken, Some("job-broken")).unwrap();
+    fs::write(
+        candidate_path(&fixture.target(), &broken).unwrap(),
+        "corrupted candidate",
+    )
+    .unwrap();
+    fs::write(
+        public_binary(&fixture.target(), "debug").unwrap(),
+        "externally modified public binary",
+    )
+    .unwrap();
+    let error = finish_publication(&fixture.target(), &broken_prepared)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("候选构建产物校验失败"),
+        "缺少原始发布失败原因: {error}"
+    );
+    assert!(
+        error.contains("公开程序已被其他操作修改"),
+        "缺少恢复失败原因: {error}"
+    );
+    let _ = prepared;
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_locked_binary_errors_match_access_denied_and_sharing_violation() {
+    assert!(is_locked_binary_error_parts(
+        std::io::ErrorKind::PermissionDenied,
+        Some(5)
+    ));
+    assert!(is_locked_binary_error_parts(
+        std::io::ErrorKind::Other,
+        Some(32)
+    ));
+    assert!(!is_locked_binary_error_parts(
+        std::io::ErrorKind::NotFound,
+        Some(2)
+    ));
+}

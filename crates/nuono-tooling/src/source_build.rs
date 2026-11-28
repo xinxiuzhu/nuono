@@ -798,8 +798,11 @@ pub fn build_locked(
         "构建后插件源码已变化，未发布程序"
     );
     let reused = candidate.is_reused();
+    let deferred_reuse = candidate.is_deferred_reuse();
     let binary = artifacts::publish_validated_candidate(&lock.target, candidate, None)?;
-    if reused {
+    if deferred_reuse {
+        eprintln!("已将待生效构建写入应用入口，准备启动新版本");
+    } else if reused {
         eprintln!("应用产物未变化，校验通过；沿用已发布程序，无需再次复制或备份");
     }
     publication_started.finish();
@@ -970,7 +973,7 @@ pub fn complete_job_candidate(
         same_sources(&current_sources(root)?, &publication.artifact.sources),
         "任务提交期间插件源码已变化，未发布程序"
     );
-    let binary = artifacts::finish_publication(&lock.target, publication)?;
+    let binary = artifacts::finish_job_publication(&lock.target, publication)?;
     Ok(binary)
 }
 

@@ -49,9 +49,15 @@ fn prepare_known_source_startup(
 }
 
 fn source_application_entry(executable: &Path, target: &Path) -> bool {
+    let executable = executable
+        .canonicalize()
+        .unwrap_or_else(|_| executable.to_path_buf());
+    let target = target
+        .canonicalize()
+        .unwrap_or_else(|_| target.to_path_buf());
     executable.file_name().is_some_and(|name| {
         name == format!("nuono-application{}", std::env::consts::EXE_SUFFIX).as_str()
-    }) && executable.starts_with(target.canonicalize().as_deref().unwrap_or(target))
+    }) && executable.starts_with(&target)
 }
 
 pub(crate) fn remember_runtime_executable() {
@@ -79,6 +85,10 @@ pub(crate) fn validate_source_startup() -> Result<()> {
     let target = target.canonicalize().unwrap_or(target);
     crate::source_operations::recover_before_build(&root).map_err(anyhow::Error::msg)?;
     if let Some(publication) = read_publication(&target, env!("NUONO_BUILD_PROFILE"))? {
+        ensure!(
+            !publication.deferred_binary,
+            "新版本构建尚未写入程序入口，请通过源码启动器重新启动"
+        );
         if running_binary_sha256() != Some(publication.artifact.sha256.as_str()) {
             verify_publication(&target, &publication, &current_sources(&root)?)?;
             return launch(&public_binary(&target, &publication.artifact.profile)?);
