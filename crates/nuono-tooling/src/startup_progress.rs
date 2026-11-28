@@ -103,8 +103,13 @@ impl Stage {
 
     /// 为编译、浏览器预热等耗时操作立即显示进度。
     pub fn visible(name: &'static str) -> Self {
+        Self::visible_with(name, name)
+    }
+
+    /// 开始提示与完成提示分开：开始提示用于告诉用户「正在做什么、请等待」，完成提示仍用阶段名。
+    pub fn visible_with(name: &'static str, start_message: &'static str) -> Self {
         start();
-        report(tracing::Level::INFO, &format!("{name}…"));
+        report(tracing::Level::INFO, &format!("{start_message}…"));
         Self {
             name,
             started: Instant::now(),
