@@ -75,6 +75,7 @@ crates/nuono-server/logs/
 /tmp/
 .history/
 .idea/
+.vscode/
 /.vscode/*.local.*
 /.vscode/settings.local.json
 *.swp

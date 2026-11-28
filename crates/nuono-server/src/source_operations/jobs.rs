@@ -126,6 +126,8 @@ pub(crate) fn source_root() -> OpResult<PathBuf> {
         .map(Ok)
         .unwrap_or_else(std::env::current_exe)
         .map_err(|e| e.to_string())?;
+    // Windows 上 `current_exe` 返回普通盘符路径，`canonicalize` 却会加 `\\?\` 逐字前缀；统一形态后再比较。
+    let executable = executable.canonicalize().unwrap_or(executable);
     let target = source_build::target_dir(&root).map_err(|e| e.to_string())?;
     let target = target.canonicalize().unwrap_or(target);
     // 优先使用启动时缓存的可执行文件路径：在 Linux 上，若运行中的二进制被新构建产物原子替换，`/proc/self/exe` 会追加 ` (deleted)` 后缀。
