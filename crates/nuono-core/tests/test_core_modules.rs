@@ -255,6 +255,7 @@ async fn test_wait_session_runtime_stage_blocks_waiting_session() {
         unified_event: None,
         resolved_user_id: None,
         resolved_identity_id: None,
+        web_chat_account_id: None,
         blocked: false,
         is_message: true,
         reply_attempts: std::sync::atomic::AtomicUsize::new(0),

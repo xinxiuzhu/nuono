@@ -141,6 +141,11 @@ pub trait PermissionStore: Send + Sync {
     ) -> Result<Option<Role>, String> {
         Ok(None)
     }
+
+    /// 按站点账号 ID 查询有效注册账号角色（仅用于服务端已认证的网页对话上下文）。
+    async fn account_role(&self, _account_id: i64) -> Result<Option<Role>, String> {
+        Ok(None)
+    }
 }
 
 pub struct PermissionService {
@@ -162,6 +167,19 @@ impl PermissionService {
         user_id: &str,
         group_role: Option<&str>,
     ) -> Result<ActorPermission, PermissionError> {
+        self.evaluate_for_account(platform, namespace, user_id, group_role, None)
+            .await
+    }
+
+    /// 评估聊天参与者的最终权限；当 `account_id` 由服务端网页会话认证提供时，直接查该账号实时角色。
+    pub async fn evaluate_for_account(
+        &self,
+        platform: Option<&str>,
+        namespace: Option<&str>,
+        user_id: &str,
+        group_role: Option<&str>,
+        account_id: Option<i64>,
+    ) -> Result<ActorPermission, PermissionError> {
         let settings = self
             .store
             .permission_settings()
@@ -173,11 +191,18 @@ impl PermissionService {
             return Ok(ActorPermission::Banned);
         }
 
-        let bound_role = self
-            .store
-            .bound_account_role(platform, namespace, user_id)
-            .await
-            .map_err(PermissionError::Store)?;
+        let bound_role = match account_id {
+            Some(id) => self
+                .store
+                .account_role(id)
+                .await
+                .map_err(PermissionError::Store)?,
+            None => self
+                .store
+                .bound_account_role(platform, namespace, user_id)
+                .await
+                .map_err(PermissionError::Store)?,
+        };
 
         Ok(ActorPermission::Allowed(resolve_chat_level(
             group_role, bound_role,

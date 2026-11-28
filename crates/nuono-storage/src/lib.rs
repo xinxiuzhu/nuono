@@ -105,6 +105,35 @@ impl nuono_app::permission::PermissionStore for Database {
         }
         Ok(best)
     }
+
+    async fn account_role(
+        &self,
+        account_id: i64,
+    ) -> std::result::Result<Option<nuono_app::auth::Role>, String> {
+        use sea_orm::{ConnectionTrait, Statement};
+        if account_id <= 0 {
+            return Ok(None);
+        }
+        let sql = if self.backend() == sea_orm::DbBackend::Sqlite {
+            "SELECT role FROM nuono_users WHERE id = ?1 AND status = 'active' AND account_kind = 'registered'"
+        } else {
+            "SELECT role FROM nuono_users WHERE id = $1 AND status = 'active' AND account_kind = 'registered'"
+        };
+        let Some(row) = self
+            .orm()
+            .query_one_raw(Statement::from_sql_and_values(
+                self.backend(),
+                sql,
+                [account_id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?
+        else {
+            return Ok(None);
+        };
+        let role_text: String = row.try_get("", "role").map_err(|e| e.to_string())?;
+        Ok(nuono_app::auth::Role::parse(&role_text))
+    }
 }
 
 mod agent_store;

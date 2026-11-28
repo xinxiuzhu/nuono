@@ -96,7 +96,9 @@ impl<'a> nuono_app::pipeline::StageExecutor<RuntimeEventContext<'a>> for EventKe
             RuntimeEventStage::WaitSession => self.wait_session_runtime_stage.handle(ctx).await,
             RuntimeEventStage::Filter => self.filter_runtime_stage.handle(ctx).await,
             RuntimeEventStage::CoreCommands => {
-                if self.assistant.handle_binding_event(ctx).await {
+                if ctx.web_chat_account_id.is_none()
+                    && self.assistant.handle_binding_event(ctx).await
+                {
                     ctx.blocked = true;
                     return Ok(());
                 }
@@ -167,16 +169,22 @@ impl<'a> nuono_app::pipeline::StageExecutor<RuntimeEventContext<'a>> for EventKe
             }
             RuntimeEventStage::Matcher => self.matcher_runtime_stage.handle(ctx).await,
             RuntimeEventStage::AgentRuntime => {
-                let will_trigger_ai =
-                    Self::is_private_message(&ctx.event) || Self::is_group_ai_trigger(ctx);
-                if will_trigger_ai && !self.ensure_interactive_user_resolved(ctx).await {
-                    return Ok(());
-                }
-                if self.assistant.handle_event(ctx).await {
+                if let Some(account_id) = ctx.web_chat_account_id {
+                    self.assistant.handle_web_chat_event(ctx, account_id).await;
                     ctx.blocked = true;
                     Ok(())
                 } else {
-                    self.agent_runtime_stage.handle(ctx).await
+                    let will_trigger_ai =
+                        Self::is_private_message(&ctx.event) || Self::is_group_ai_trigger(ctx);
+                    if will_trigger_ai && !self.ensure_interactive_user_resolved(ctx).await {
+                        return Ok(());
+                    }
+                    if self.assistant.handle_event(ctx).await {
+                        ctx.blocked = true;
+                        Ok(())
+                    } else {
+                        self.agent_runtime_stage.handle(ctx).await
+                    }
                 }
             }
             RuntimeEventStage::EventPublish => self.event_publish_runtime_stage.handle(ctx).await,
@@ -211,6 +219,8 @@ pub struct RuntimeEventContext<'a> {
     pub resolved_user_id: Option<i64>,
     /// 交互懒创建解析出的平台身份主键 ID（`nuono_platform_identities.id`）。
     pub resolved_identity_id: Option<i64>,
+    /// 经服务端核验的网页对话所属站点账号 ID（仅限已登录账号的网页私聊会话，测试沙盒与外部平台保持 `None`）。
+    pub web_chat_account_id: Option<i64>,
     /// 消费语义，不是错误语义。置位后后续消息阶段不再运行；阶段返回 `Err` 本身不会
     /// 自动置位，runtime 调度器会记录错误并按 fail-open 方式继续。
     pub blocked: bool,
@@ -234,6 +244,7 @@ impl RuntimeEventContext<'_> {
             unified_event: None,
             resolved_user_id: self.resolved_user_id,
             resolved_identity_id: self.resolved_identity_id,
+            web_chat_account_id: self.web_chat_account_id,
             blocked: false,
             is_message: true,
             reply_attempts: std::sync::atomic::AtomicUsize::new(0),
@@ -850,6 +861,7 @@ impl EventKernel {
             unified_event: None,
             resolved_user_id: None,
             resolved_identity_id: None,
+            web_chat_account_id: None,
             blocked: false,
             is_message,
             reply_attempts: std::sync::atomic::AtomicUsize::new(0),
@@ -889,6 +901,42 @@ impl EventKernel {
         event: UnifiedEvent,
         action_sink: Option<Arc<dyn RuntimeActionSink>>,
         route: Option<&super::RuntimeBotRoute>,
+    ) -> Result<RuntimeEventProcessResult> {
+        self.process_unified_event_inner(platform, event, action_sink, route, None)
+            .await
+    }
+
+    /// 处理已登录账号的网页对话事件：复用完整插件与核心指令管线，透传服务端核验账号角色，
+    /// 未命中指令或插件时转入该账号的个人伴侣助手（角色卡、跨端记忆与额度控制）。
+    pub async fn process_web_chat_event(
+        &self,
+        account_id: i64,
+        event: UnifiedEvent,
+        action_sink: Option<Arc<dyn RuntimeActionSink>>,
+        route: Option<&super::RuntimeBotRoute>,
+    ) -> Result<RuntimeEventProcessResult> {
+        let is_active = self
+            .db
+            .find_user_by_id(account_id)
+            .await?
+            .is_some_and(|user| user.status == crate::db::STATUS_ACTIVE);
+        if !is_active {
+            return Ok(RuntimeEventProcessResult {
+                blocked: true,
+                is_message: event.is_message(),
+            });
+        }
+        self.process_unified_event_inner("onebot", event, action_sink, route, Some(account_id))
+            .await
+    }
+
+    async fn process_unified_event_inner(
+        &self,
+        platform: &str,
+        event: UnifiedEvent,
+        action_sink: Option<Arc<dyn RuntimeActionSink>>,
+        route: Option<&super::RuntimeBotRoute>,
+        web_chat_account_id: Option<i64>,
     ) -> Result<RuntimeEventProcessResult> {
         let Some(bot_id) = event.self_id() else {
             return Ok(RuntimeEventProcessResult::default());
@@ -933,15 +981,26 @@ impl EventKernel {
             action_transport,
             domain_event,
             unified_event: Some(event),
-            resolved_user_id: None,
+            resolved_user_id: web_chat_account_id,
             resolved_identity_id: None,
+            web_chat_account_id,
             blocked: false,
             is_message,
             reply_attempts: std::sync::atomic::AtomicUsize::new(0),
             reply_ok: std::sync::atomic::AtomicUsize::new(0),
         };
 
-        Ok(self.process_runtime_context(&mut ctx).await)
+        let result = match web_chat_account_id {
+            Some(account_id) => {
+                nuono_plugin::permission::with_authenticated_account(
+                    account_id,
+                    self.process_runtime_context(&mut ctx),
+                )
+                .await
+            }
+            None => self.process_runtime_context(&mut ctx).await,
+        };
+        Ok(result)
     }
 
     /// 处理以字符串原生身份为权威的领域事件。
@@ -985,6 +1044,7 @@ impl EventKernel {
             unified_event: None,
             resolved_user_id: None,
             resolved_identity_id: None,
+            web_chat_account_id: None,
             blocked: false,
             is_message,
             reply_attempts: std::sync::atomic::AtomicUsize::new(0),
@@ -1673,6 +1733,7 @@ mod tests {
             unified_event: None,
             resolved_user_id: None,
             resolved_identity_id: None,
+            web_chat_account_id: None,
             blocked: false,
             is_message: true,
             reply_attempts: std::sync::atomic::AtomicUsize::new(0),

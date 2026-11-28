@@ -240,6 +240,16 @@ impl Session {
         Ok(MessageReceipt { id, seq })
     }
 
+    fn push_seed(&self, direction: &str, text: String) {
+        let _ = self.push(
+            direction,
+            vec![json!({"type":"text","data":{"text":text}})],
+            None,
+            None,
+            vec![],
+        );
+    }
+
     fn system(&self, text: impl Into<String>, error: Option<String>) {
         if self.mode == SessionMode::Conversation && error.is_none() {
             return;
@@ -399,11 +409,29 @@ impl SandboxManager {
     pub(crate) fn create(&self, owner: i64, options: CreateSession) -> Result<SessionSnapshot> {
         self.cleanup();
         let session = Session::new(owner, options)?;
-        self.insert(session)
+        self.insert(session, Vec::new())
     }
 
-    /// 已登录账号打开或恢复其专属的网页私聊会话（管理员沙盒测试身份则每次独立创建、绝不复用）。
-    pub(crate) fn conversation(&self, owner: i64, sender: &str) -> Result<SessionSnapshot> {
+    /// 返回当前登录账号已在内存中的网页私聊会话快照（若不存在则返回 `None`，不会新建会话）。
+    pub(crate) fn existing_conversation(&self, owner: i64) -> Result<Option<SessionSnapshot>> {
+        self.cleanup();
+        let sessions = self.sessions();
+        let Some(existing) = sessions
+            .values()
+            .find(|existing| existing.owner == owner && existing.mode == SessionMode::Conversation)
+        else {
+            return Ok(None);
+        };
+        existing.snapshot(0).map(Some)
+    }
+
+    /// 已登录账号打开或恢复其专属的网页私聊会话；仅在新建会话时回填跨端历史轮次。
+    pub(crate) fn conversation_with_seed(
+        &self,
+        owner: i64,
+        sender: &str,
+        seed: Vec<(String, String)>,
+    ) -> Result<SessionSnapshot> {
         self.cleanup();
         let session = Session::with_mode(
             owner,
@@ -414,10 +442,14 @@ impl SandboxManager {
             },
             SessionMode::Conversation,
         )?;
-        self.insert(session)
+        self.insert(session, seed)
     }
 
-    fn insert(&self, session: Arc<Session>) -> Result<SessionSnapshot> {
+    fn insert(
+        &self,
+        session: Arc<Session>,
+        seed: Vec<(String, String)>,
+    ) -> Result<SessionSnapshot> {
         let mut sessions = self.sessions();
         if session.mode == SessionMode::Conversation
             && let Some(existing) = sessions.values().find(|existing| {
@@ -438,6 +470,9 @@ impl SandboxManager {
         // 即便发生极低概率的随机负数 ID 碰撞，也直接报错拒绝，绝不覆盖另一个活跃会话的虚拟路由。
         if sessions.values().any(|s| s.bot_id == session.bot_id) {
             return Err(validation("测试身份分配失败，请重试"));
+        }
+        for (direction, text) in seed {
+            session.push_seed(&direction, text);
         }
         let sink = Arc::new(sink::SandboxSink::new(Arc::downgrade(&session)));
         let generation = self
@@ -551,15 +586,31 @@ impl SandboxManager {
             }
             let _slot = slot;
             let before = job_session.state().outgoing_count;
-            let process = tokio::time::timeout(
-                PROCESS_TIMEOUT,
-                kernel.process_unified_event_with_route(
-                    "onebot",
-                    unified,
-                    Some(sink),
-                    Some(&route),
-                ),
-            );
+            let dispatch = async {
+                match job_session.mode {
+                    SessionMode::Conversation => {
+                        kernel
+                            .process_web_chat_event(
+                                job_session.owner,
+                                unified,
+                                Some(sink),
+                                Some(&route),
+                            )
+                            .await
+                    }
+                    SessionMode::Test => {
+                        kernel
+                            .process_unified_event_with_route(
+                                "onebot",
+                                unified,
+                                Some(sink),
+                                Some(&route),
+                            )
+                            .await
+                    }
+                }
+            };
+            let process = tokio::time::timeout(PROCESS_TIMEOUT, dispatch);
             let result = std::panic::AssertUnwindSafe(process).catch_unwind().await;
             match result {
                 Ok(Ok(Ok(result))) => {

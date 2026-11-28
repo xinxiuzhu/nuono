@@ -45,9 +45,44 @@ async fn open(
     ApiCaller(caller): ApiCaller,
     ApiJson(_request): ApiJson<OpenConversation>,
 ) -> ApiReply<SessionSnapshot> {
+    let id = match owner(&caller) {
+        Ok(id) => id,
+        Err(error) => return ApiResponse::from_err(&error),
+    };
+    match state.sandbox.existing_conversation(id) {
+        Ok(Some(snapshot)) => return ApiResponse::ok(snapshot),
+        Ok(None) => {}
+        Err(error) => return ApiResponse::from_err(&error),
+    }
+    let seed = load_conversation_seed(&state, id).await;
     ApiResponse::from_result(
-        owner(&caller).and_then(|id| state.sandbox.conversation(id, &caller.username)),
+        state
+            .sandbox
+            .conversation_with_seed(id, &caller.username, seed),
     )
+}
+
+/// 首次创建或重建网页私聊会话时，从当前角色卡的持久化对话轮次回填跨端历史。
+async fn load_conversation_seed(state: &AppState, account_id: i64) -> Vec<(String, String)> {
+    if !state.db.is_ai_module_installed().await.unwrap_or(false) {
+        return Vec::new();
+    }
+    let Ok(turns) = state.db.assistant_turns(account_id).await else {
+        return Vec::new();
+    };
+    let mut seed = Vec::with_capacity(turns.len() * 2);
+    for turn in turns {
+        if turn.control {
+            continue;
+        }
+        seed.push(("incoming".to_owned(), turn.text));
+        if let Some(failure) = turn.failure {
+            seed.push(("outgoing".to_owned(), failure.message().to_owned()));
+        } else if let Some(reply) = turn.reply {
+            seed.push(("outgoing".to_owned(), reply));
+        }
+    }
+    seed
 }
 
 #[utoipa::path(get, path="/sessions/{id}", operation_id="chat_read_session", tag="chat",

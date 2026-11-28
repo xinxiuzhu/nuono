@@ -128,13 +128,18 @@ impl IdentityCache {
     }
 }
 
-/// 判断该平台身份是否属于机器人、系统或匿名非真人实体。
+/// 判断该平台身份是否属于机器人、系统、匿名或沙盒虚拟负数非真人实体。
 pub fn is_non_human_identity(identity: &IdentityRef) -> bool {
     if *identity.kind() != IdentityKind::User {
         return true;
     }
     let raw = identity.value().as_str().trim();
-    if raw.is_empty() || raw == "0" {
+    if raw.is_empty()
+        || raw == "0"
+        || raw
+            .strip_prefix('-')
+            .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+    {
         return true;
     }
     let lower = raw.to_ascii_lowercase();
@@ -526,6 +531,11 @@ mod tests {
         );
         assert!(
             db.resolve_or_provision_identity(&qq_user("0"), None)
+                .await
+                .is_err()
+        );
+        assert!(
+            db.resolve_or_provision_identity(&qq_user("-4000000000001"), None)
                 .await
                 .is_err()
         );

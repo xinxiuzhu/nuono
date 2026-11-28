@@ -5,6 +5,23 @@ pub use nuono_app::permission::{
 };
 use serde_json::Value;
 
+tokio::task_local! {
+    static AUTHENTICATED_ACCOUNT: i64;
+}
+
+/// 在当前异步任务作用域内绑定经服务端核验的站点账号 ID（仅限网页对话管线调用）。
+pub async fn with_authenticated_account<F: std::future::Future>(
+    account_id: i64,
+    future: F,
+) -> F::Output {
+    AUTHENTICATED_ACCOUNT.scope(account_id, future).await
+}
+
+/// 读取当前异步任务作用域内经服务端核验的站点账号 ID。
+pub fn current_authenticated_account() -> Option<i64> {
+    AUTHENTICATED_ACCOUNT.try_with(|id| *id).ok()
+}
+
 pub struct PermissionManager {
     inner: std::sync::Arc<nuono_app::permission::PermissionService>,
     runtime: Option<crate::runtime::RuntimeExecutor>,
@@ -49,14 +66,17 @@ impl PermissionManager {
             .and_then(|v| v.get("role"))
             .and_then(Value::as_str)
             .map(str::to_owned);
+        // 在切换到插件运行时执行器之前捕获任务作用域内的已认证账号 ID，避免跨运行时丢失上下文。
+        let account_id = current_authenticated_account();
         let inner = self.inner.clone();
         let evaluation = async move {
             inner
-                .evaluate(
+                .evaluate_for_account(
                     platform.as_deref(),
                     namespace.as_deref(),
                     &user_id,
                     role.as_deref(),
+                    account_id,
                 )
                 .await
                 .map_err(|error| match error {

@@ -101,6 +101,7 @@ fn context(sender: mpsc::Sender<TransportFrame>) -> RuntimeEventContext<'static>
         unified_event: None,
         resolved_user_id: None,
         resolved_identity_id: None,
+        web_chat_account_id: None,
         blocked: false,
         is_message: true,
         reply_attempts: AtomicUsize::new(0),

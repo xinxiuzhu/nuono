@@ -102,6 +102,14 @@ struct PlatformDelivery {
     reply: RuntimeEventContext<'static>,
 }
 
+enum AssistantDelivery {
+    Platform(PlatformDelivery),
+    WebChat {
+        reply: RuntimeEventContext<'static>,
+        done: tokio::sync::oneshot::Sender<()>,
+    },
+}
+
 /// 将全局 AI 总开关叠加到个人对话配置上；总开关关闭时网页对话与跨端私聊一并停用。
 fn effective_assistant_settings(
     ai: &crate::config::AIConfig,
@@ -322,7 +330,7 @@ impl Assistant {
         request_id: String,
         text: Option<String>,
         retry_of: Option<String>,
-        delivery: Option<PlatformDelivery>,
+        delivery: Option<AssistantDelivery>,
     ) -> Result<AssistantAdmission> {
         if text
             .as_ref()
@@ -395,7 +403,10 @@ impl Assistant {
                     let effective = effective_assistant_settings(&config.ai);
                     service.db.start_assistant_turn(account_id, &effective, AssistantTurnRequest {
                         request_key: &request_id, text: text.as_deref(), retry_of: retry_of.as_deref(),
-                        sender: delivery.as_ref().map(|delivery| &delivery.identity),
+                        sender: match delivery.as_ref() {
+                            Some(AssistantDelivery::Platform(platform)) => Some(&platform.identity),
+                            Some(AssistantDelivery::WebChat { .. }) | None => None,
+                        },
                     }).await
                 }.await;
                 let receipt = match preparation {
@@ -442,14 +453,37 @@ impl Assistant {
                 }
                 let fallback = if *stop.borrow() { TurnFailure::Interrupted } else { fallback };
                 let settled = service.settle(account_id, &receipt.id, fallback).await;
-                if let (Some(receipt), Some(delivery)) = (settled.as_ref(), delivery)
-                    && !*stop.borrow()
-                {
-                    tokio::select! {
-                        biased;
-                        _ = stop.changed() => {},
-                        () = service.deliver_receipt(account_id, receipt, &request_id, delivery) => {},
+                match delivery {
+                    Some(AssistantDelivery::Platform(platform)) => {
+                        if let Some(receipt) = settled.as_ref()
+                            && !*stop.borrow()
+                        {
+                            tokio::select! {
+                                biased;
+                                _ = stop.changed() => {},
+                                () = service.deliver_receipt(account_id, receipt, &request_id, platform) => {},
+                            }
+                        }
                     }
+                    Some(AssistantDelivery::WebChat { reply, done }) => {
+                        if let Some(receipt) = settled.as_ref()
+                            && !*stop.borrow()
+                        {
+                            let response = receipt
+                                .failure
+                                .map(|failure| failure.message().to_owned())
+                                .or_else(|| receipt.reply.clone());
+                            if let Some(response) = response {
+                                tokio::select! {
+                                    biased;
+                                    _ = stop.changed() => {},
+                                    _ = reply.send_reply_text(response, "Assistant") => {},
+                                }
+                            }
+                        }
+                        let _ = done.send(());
+                    }
+                    None => {}
                 }
                 if let Some(saved) = settled.as_ref().filter(|turn| turn.status == TurnStatus::Succeeded && !turn.control)
                     && !*stop.borrow() && !service.deleting.contains(&account_id) {
@@ -848,7 +882,7 @@ impl Assistant {
                 key,
                 retry_of.is_none().then(|| text.to_owned()),
                 retry_of,
-                Some(delivery),
+                Some(AssistantDelivery::Platform(delivery)),
             )
             .await
         {
@@ -862,6 +896,184 @@ impl Assistant {
                 Some("暂时无法回复，请稍后重试。")
             }
         }
+    }
+
+    /// 处理网页对话中未命中插件或系统指令的消息，复用个人伴侣的角色卡、跨端记忆与额度控制。
+    pub(crate) async fn handle_web_chat_event(
+        &self,
+        ctx: &RuntimeEventContext<'_>,
+        account_id: i64,
+    ) {
+        let raw_text = ctx
+            .domain_event
+            .as_ref()
+            .and_then(|event| event.message())
+            .map(|message| {
+                message
+                    .segments
+                    .iter()
+                    .filter_map(|segment| match segment {
+                        MessageSegment::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>()
+            })
+            .unwrap_or_else(|| {
+                ctx.event
+                    .get("raw_message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            });
+        let trimmed = raw_text.trim();
+        let text = if let Some(rest) = strip_ai_prefix(trimmed) {
+            if rest.is_empty() {
+                ctx.send_reply_text("请在 /ai 后输入想聊的内容。".into(), "Assistant")
+                    .await;
+                return;
+            }
+            rest
+        } else {
+            trimmed
+        };
+        if text.is_empty() {
+            return;
+        }
+        let config = self.config.snapshot().await;
+        let settings = effective_assistant_settings(&config.ai);
+        if !settings.enabled {
+            ctx.send_reply_text(
+                "网页 AI 对话尚未开启；你仍然可以直接发送插件或系统指令（如 nuono help）。".into(),
+                "Assistant",
+            )
+            .await;
+            return;
+        }
+        if config.ai.is_account_blocked(account_id) {
+            ctx.send_reply_text(
+                "管理员已暂停你的 AI 使用权限；你仍然可以使用插件与系统指令。".into(),
+                "Assistant",
+            )
+            .await;
+            return;
+        }
+        if self.reconcile_idle(account_id).await.is_err() {
+            ctx.send_reply_text("上次对话结果正在核对，请稍后重试。".into(), "Assistant")
+                .await;
+            return;
+        }
+        let retry_of = if text == "重试" {
+            let latest = self
+                .db
+                .assistant_turns(account_id)
+                .await
+                .ok()
+                .and_then(|turns| turns.into_iter().last());
+            match latest.as_ref() {
+                Some(receipt) if receipt.retryable => Some(receipt.id.clone()),
+                Some(receipt) if receipt.status == TurnStatus::Succeeded => {
+                    let reply = receipt
+                        .reply
+                        .clone()
+                        .unwrap_or_else(|| "暂无可重试的消息，请直接发送新的聊天内容。".into());
+                    ctx.send_reply_text(reply, "Assistant").await;
+                    return;
+                }
+                Some(receipt) if receipt.status == TurnStatus::Running => {
+                    ctx.send_reply_text("助手正在回复，请等当前消息完成。".into(), "Assistant")
+                        .await;
+                    return;
+                }
+                _ => {
+                    ctx.send_reply_text(
+                        "暂无可重试的消息，请直接发送新的聊天内容。".into(),
+                        "Assistant",
+                    )
+                    .await;
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let session_id = ctx
+            .event
+            .get("web_chat_session_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("session");
+        let message_id = ctx
+            .event
+            .get("message_id")
+            .and_then(|value| {
+                value
+                    .as_i64()
+                    .map(|id| id.to_string())
+                    .or_else(|| value.as_str().map(str::to_owned))
+            })
+            .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+        let key = format!("webchat:{session_id}:{message_id}");
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let delivery = AssistantDelivery::WebChat {
+            reply: ctx.reply_context(),
+            done: done_tx,
+        };
+        match self
+            .submit(
+                account_id,
+                key,
+                retry_of.is_none().then(|| text.to_owned()),
+                retry_of,
+                Some(delivery),
+            )
+            .await
+        {
+            Ok(AssistantAdmission::Accepted) => {
+                let _ = done_rx.await;
+            }
+            Ok(AssistantAdmission::Duplicate) => {}
+            Ok(AssistantAdmission::Unavailable) => {
+                ctx.send_reply_text(
+                    "当前账号暂无 AI 对话权限，请联系管理员；你仍然可以使用插件与系统指令。".into(),
+                    "Assistant",
+                )
+                .await;
+            }
+            Ok(AssistantAdmission::Exhausted) => {
+                ctx.send_reply_text(
+                    "今天的 AI 对话额度已用完；你仍然可以使用插件与系统指令。".into(),
+                    "Assistant",
+                )
+                .await;
+            }
+            Err(NuonoError::Conflict(message)) | Err(NuonoError::PermissionDenied(message)) => {
+                ctx.send_reply_text(message, "Assistant").await;
+            }
+            Err(NuonoError::Validation(_)) => {
+                ctx.send_reply_text("请发送 1 至 4096 字节的文字消息。".into(), "Assistant")
+                    .await;
+            }
+            Err(error) => {
+                tracing::warn!(error_kind = error.kind(), "网页伴侣助手回复失败");
+                ctx.send_reply_text("AI 助手暂时无法回复，请稍后重试。".into(), "Assistant")
+                    .await;
+            }
+        }
+    }
+}
+
+/// 若消息以 `/ai` 开头（不区分大小写且后跟空白或结束），返回去掉前缀后的正文。
+fn strip_ai_prefix(text: &str) -> Option<&str> {
+    let prefix = text.get(..3)?;
+    if !prefix.eq_ignore_ascii_case("/ai") {
+        return None;
+    }
+    let rest = &text[3..];
+    if rest.is_empty() {
+        Some("")
+    } else if rest.chars().next().is_some_and(char::is_whitespace) {
+        Some(rest.trim())
+    } else {
+        None
     }
 }
 
