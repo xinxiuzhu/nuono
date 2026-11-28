@@ -28,7 +28,7 @@ async fn list_jobs(
         Err(error) => ApiResponse::from_err(&error.0),
     }
 }
-#[utoipa::path(post, path="/store/install/{id}", operation_id="plugin_store_install", tag="plugin_store", request_body=InstallBody, params(("id"=String,Path)), responses((status=200, body=ApiResponse<crate::source_schemas::StoreJobSchema>)))]
+#[utoipa::path(post, path="/store/install/{id}", operation_id="plugin_store_install", tag="plugin_store", description="从商店或 Git 仓库链接安装扩展。链接安装会忽略表单 ID：ID 由仓库地址推断（nuono-adapter-qq → qq），类型由仓库清单决定（适配器自动装进适配器目录）。商店安装仍使用商店清单的 ID。", request_body=InstallBody, params(("id"=String,Path)), responses((status=200, body=ApiResponse<crate::source_schemas::StoreJobSchema>)))]
 async fn install(
     State(state): State<AppState>,
     Path(id): Path<String>,

@@ -80,6 +80,56 @@ fn is_valid_repo_url(url: &str) -> bool {
     })
 }
 
+/// 从仓库地址推断扩展 ID，供不填写 ID 的链接安装使用。
+///
+/// 取地址最后一段路径，去掉 `.git` 后缀与 `nuono-plugin-` / `nuono-adapter-` 前缀，
+/// 再把目录名不允许的字符替换为 `-`。推断不出合法 ID 时返回错误，由调用方提示用户显式提供。
+pub(crate) fn link_install_id(repo_url: &str) -> Result<String, String> {
+    let repo_url = repo_url.trim().trim_end_matches('/');
+    if !is_valid_repo_url(repo_url) {
+        return Err("仓库地址无效，请使用无密码的 HTTPS 或 SSH Git 地址".into());
+    }
+    let name = match url::Url::parse(repo_url) {
+        Ok(parsed) => parsed.path_segments().and_then(|mut segments| {
+            segments
+                .rfind(|segment| !segment.is_empty())
+                .map(str::to_string)
+        }),
+        // `git@host:owner/repo.git` 这类 scp 形式无法按 URL 解析，退回到末段分隔。
+        Err(_) => repo_url
+            .rsplit(['/', ':'])
+            .find(|segment| !segment.is_empty())
+            .map(str::to_string),
+    }
+    .ok_or("无法从仓库地址推断扩展 ID，请显式提供")?;
+    let name = name.strip_suffix(".git").unwrap_or(&name);
+    let name = name
+        .strip_prefix("nuono-adapter-")
+        .or_else(|| name.strip_prefix("nuono-plugin-"))
+        .unwrap_or(name);
+    let id: String = name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let id = id
+        .trim_matches(|character| matches!(character, '-' | '_'))
+        .to_string();
+    if !is_valid_plugin_id(&id) {
+        return Err(if id.is_empty() {
+            "无法从仓库地址推断扩展 ID，请显式提供".to_string()
+        } else {
+            format!("从仓库地址推断的扩展 ID `{id}` 无效，请显式提供")
+        });
+    }
+    Ok(id)
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
 #[schema(as = api::plugin_store::StorePlugin)]
 pub struct StorePlugin {
@@ -540,6 +590,43 @@ pub(crate) fn recover_before_build(root: &std::path::Path) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_install_id_follows_repository_name() {
+        assert_eq!(
+            link_install_id("https://github.com/xinxiuzhu/nuono-adapter-qq.git").unwrap(),
+            "qq"
+        );
+        assert_eq!(
+            link_install_id("https://github.com/xinxiuzhu/nuono-adapter-qq/").unwrap(),
+            "qq"
+        );
+        assert_eq!(
+            link_install_id("git@github.com:xinxiuzhu/nuono-adapter-qq.git").unwrap(),
+            "qq"
+        );
+        assert_eq!(
+            link_install_id("ssh://git@github.com/xinxiuzhu/nuono-plugin-store.git").unwrap(),
+            "store"
+        );
+        assert_eq!(
+            link_install_id("https://github.com/xinxiuzhu/LinkShowNN").unwrap(),
+            "LinkShowNN"
+        );
+        assert_eq!(
+            link_install_id("https://github.com/xinxiuzhu/nuono-adapter-demo-2").unwrap(),
+            "demo-2"
+        );
+    }
+
+    #[test]
+    fn link_install_id_rejects_urls_without_a_valid_name() {
+        assert!(link_install_id("https://github.com").is_err());
+        assert!(link_install_id("https://github.com/xinxiuzhu/nuono-adapter-").is_err());
+        assert!(link_install_id("https://github.com/xinxiuzhu/hub").is_err());
+        assert!(link_install_id("file:///tmp/nuono-adapter-demo").is_err());
+        assert!(link_install_id("").is_err());
+    }
 
     fn sample_store_plugin() -> StorePlugin {
         StorePlugin {
