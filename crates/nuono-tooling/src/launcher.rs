@@ -28,10 +28,26 @@ mod unix;
 #[cfg(unix)]
 pub use unix::{StartupSignals, supervise_if_needed};
 
-// 非 Unix 平台不启用内置进程组守护，仍交由外部进程管理器（如 systemd/服务管理器）托管重启。
+// 非 Unix 平台没有进程组与信号语义，这里只做最基础的守护：子进程以约定的重启退出码退出时
+// 重新拉起自己（重新走一遍启动准备，从而完成构建发布与「重启并生效」），其余退出码原样返回。
 #[cfg(not(unix))]
 pub fn supervise_if_needed() -> anyhow::Result<Option<i32>> {
-    Ok(None)
+    use std::process::Command;
+    if std::env::var("NUONO_SUPERVISED").is_ok_and(|value| value == "1") {
+        return Ok(None);
+    }
+    loop {
+        let mut command = Command::new(std::env::current_exe()?);
+        command
+            .args(std::env::args_os().skip(1))
+            .env("NUONO_SUPERVISED", "1")
+            .env_remove("NUONO_STARTUP_ELAPSED_MS");
+        let status = command.status()?;
+        if status.code() != Some(restart_exit_code()) {
+            return Ok(Some(status.code().unwrap_or(1)));
+        }
+        eprintln!("[启动器] Nuono 已退出，正在重新执行启动命令…");
+    }
 }
 
 #[cfg(not(unix))]
