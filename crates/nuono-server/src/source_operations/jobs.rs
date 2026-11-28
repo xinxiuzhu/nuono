@@ -430,6 +430,21 @@ pub(crate) async fn submit_checkout(
     submit(state, id, "update", None, Some(commit), Some(expected)).await
 }
 
+/// 解析安装任务最终使用的扩展 ID。
+///
+/// 链接安装（请求带仓库地址）时，表单里的 ID 只是占位，真实 ID 由仓库地址推断；
+/// 商店安装、更新和版本切换沿用商店清单或现有目录的 ID。
+fn resolve_install_id(
+    operation: &str,
+    requested: String,
+    repo_url: Option<&str>,
+) -> Result<String, String> {
+    match (operation, repo_url) {
+        ("install", Some(repo_url)) => super::link_install_id(repo_url),
+        _ => Ok(requested),
+    }
+}
+
 pub(crate) async fn submit(
     state: OperationContext,
     id: String,
@@ -463,6 +478,8 @@ pub(crate) async fn submit(
             "仓库地址无效，请使用无密码的 HTTPS 或 SSH Git 地址",
         ));
     }
+    // 链接安装的 ID 已「架空」：表单值只保留 adapter: 类型前缀的作用，目录名由仓库地址决定。
+    let id = resolve_install_id(operation, id, repo_url.as_deref()).map_err(OpError::invalid)?;
     let Ok(guard) = source_build::operation_lock().try_lock_owned() else {
         return Err(OpError::conflict(
             "已有插件构建或缓存维护正在运行，请在任务列表查看进度",
@@ -484,8 +501,9 @@ pub(crate) async fn submit(
         return Err(OpError::conflict("已有插件任务仍在运行，请等待该任务结束"));
     }
     let target = root.join(kind.directory()).join(&id);
-    if operation == "install" && target.exists() {
-        return Err(OpError::conflict("插件目录已存在；已安装的插件请使用更新"));
+    // 通过链接安装时，扩展类型要等下载到仓库清单后才能确定；目录冲突留给 run_job 按实际类型检查。
+    if operation == "install" && repo_url.is_none() && target.exists() {
+        return Err(OpError::conflict("扩展目录已存在；已安装的扩展请使用更新"));
     }
     if operation != "install" && !target.join("Cargo.toml").is_file() {
         return Err(OpError::missing(
@@ -633,7 +651,7 @@ async fn run_job(
     build_lock: Arc<source_build::ApplicationBuildLock>,
 ) -> Result<(), String> {
     let directory = directory(state);
-    let target = root.join(job.kind.directory()).join(&job.plugin_id);
+    let mut target = root.join(job.kind.directory()).join(&job.plugin_id);
     let output = log_output(directory.clone(), job.id.clone());
     if job.operation == "uninstall" {
         // 此阶段只停用并移走源码，不清理 DB 注册或群设置。新程序启动确认完整
@@ -712,10 +730,16 @@ async fn run_job(
                 )
                 .await?;
             }
+            // 链接安装只提交裸 ID，类型由仓库清单决定：适配器清单不能继续按插件安装。
+            let staged = adopt_declared_kind(root, &directory, job, &staged)?;
+            target = root.join(job.kind.directory()).join(&job.plugin_id);
             if let Err(error) = staging::seal(&directory, job, &staged) {
                 tracing::warn!(%error, "暂存源码封存失败，将保留目录");
             }
-            fs::rename(staged, &target).map_err(|e| e.to_string())?;
+            if target.exists() {
+                return Err("扩展目录已存在；已安装的扩展请使用更新".into());
+            }
+            fs::rename(&staged, &target).map_err(|e| e.to_string())?;
         } else {
             let origin = git::origin(&target).await?;
             let explicit = job.target_commit.is_some();
@@ -870,6 +894,48 @@ async fn run_job(
         }
     }
     Ok(())
+}
+
+/// 链接安装按仓库清单决定类型：清单声明为适配器时把暂存源码移入 `adapters/`
+/// 并改写任务记录。显式 `adapter:` 任务和商店安装不参与推断，插件不会被降级。
+fn adopt_declared_kind(
+    root: &FsPath,
+    directory: &FsPath,
+    job: &mut StoreJob,
+    staged: &FsPath,
+) -> Result<PathBuf, String> {
+    if job.kind != SourceKind::Plugin || job.repo_url.is_none() {
+        return Ok(staged.to_path_buf());
+    }
+    let manifest: toml::Value = toml::from_str(
+        &fs::read_to_string(staged.join("Cargo.toml")).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    if source_build::manifest_kind(&manifest).map_err(|error| error.to_string())?
+        != SourceKind::Adapter
+    {
+        return Ok(staged.to_path_buf());
+    }
+    let staged_name = job
+        .staged_name
+        .as_deref()
+        .ok_or("安装任务缺少暂存目录")?
+        .to_string();
+    let parent = root.join(SourceKind::Adapter.directory());
+    fs::create_dir_all(&parent).map_err(|error| error.to_string())?;
+    let moved = parent.join(staged_name);
+    fs::rename(staged, &moved).map_err(|error| error.to_string())?;
+    job.kind = SourceKind::Adapter;
+    if let Err(error) = persist(directory, job) {
+        // 任务记录写不进去时把源码移回原处，避免记录与实际目录类型不一致。
+        let _ = fs::rename(&moved, staged);
+        job.kind = SourceKind::Plugin;
+        return Err(error);
+    }
+    log_output(directory.to_path_buf(), job.id.clone())(
+        "仓库清单声明为平台适配器，已切换到 adapters/ 目录安装",
+    );
+    Ok(moved)
 }
 
 #[cfg(test)]
@@ -1029,6 +1095,118 @@ mod tests {
             fs::read_to_string(root.path().join("plugins/demo/Cargo.toml")).unwrap(),
             "unrelated plugin"
         );
+    }
+
+    const ADAPTER_MANIFEST: &str = "[package]\nname = \"demo-adapter\"\nversion = \"0.1.0\"\n\n[workspace]\n\n[package.metadata.nuono]\nkind = \"adapter\"\n";
+    const PLUGIN_MANIFEST: &str =
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[workspace]\n";
+
+    fn staged_install(root: &FsPath, job: &StoreJob, manifest: &str) -> PathBuf {
+        let staged = root
+            .join(SourceKind::Plugin.directory())
+            .join(job.staged_name.as_ref().unwrap());
+        fs::create_dir_all(&staged).unwrap();
+        fs::write(staged.join("Cargo.toml"), manifest).unwrap();
+        staged
+    }
+
+    #[test]
+    fn link_install_adopts_adapter_manifest_and_moves_source() {
+        let root = tempfile::tempdir().unwrap();
+        let jobs = root.path().join("data/.plugin-jobs");
+        let mut job = job("install");
+        job.repo_url = Some("https://example.invalid/nuono-adapter-demo.git".into());
+        job.staged_name = Some(".nuono-install-fixture".into());
+        let staged = staged_install(root.path(), &job, ADAPTER_MANIFEST);
+
+        let moved = adopt_declared_kind(root.path(), &jobs, &mut job, &staged).unwrap();
+
+        assert_eq!(job.kind, SourceKind::Adapter);
+        assert_eq!(moved, root.path().join("adapters/.nuono-install-fixture"));
+        assert!(moved.join("Cargo.toml").is_file());
+        assert!(!staged.exists());
+        assert_eq!(read_job(&jobs, &job.id).unwrap().kind, SourceKind::Adapter);
+        assert!(
+            fs::read_to_string(jobs.join(format!("{}.log", job.id)))
+                .unwrap()
+                .contains("adapters/")
+        );
+    }
+
+    #[test]
+    fn link_install_keeps_plugin_and_store_installs_never_switch() {
+        let root = tempfile::tempdir().unwrap();
+        let jobs = root.path().join("data/.plugin-jobs");
+        let mut link = job("install");
+        link.repo_url = Some("https://example.invalid/demo.git".into());
+        link.staged_name = Some(".nuono-install-plugin".into());
+        let staged = staged_install(root.path(), &link, PLUGIN_MANIFEST);
+        let kept = adopt_declared_kind(root.path(), &jobs, &mut link, &staged).unwrap();
+        assert_eq!(kept, staged);
+        assert_eq!(link.kind, SourceKind::Plugin);
+        assert!(!jobs.join(format!("{}.json", link.id)).exists());
+
+        // 商店安装没有仓库地址，类型以商店清单为准，不根据源码清单改类型。
+        let mut store = job("install");
+        store.staged_name = Some(".nuono-install-store".into());
+        let staged = staged_install(root.path(), &store, ADAPTER_MANIFEST);
+        let kept = adopt_declared_kind(root.path(), &jobs, &mut store, &staged).unwrap();
+        assert_eq!(kept, staged);
+        assert_eq!(store.kind, SourceKind::Plugin);
+        assert!(!root.path().join("adapters/.nuono-install-store").exists());
+    }
+
+    #[test]
+    fn link_install_ignores_the_requested_id() {
+        assert_eq!(
+            resolve_install_id(
+                "install",
+                "typed-by-user".into(),
+                Some("https://github.com/xinxiuzhu/nuono-adapter-qq.git"),
+            )
+            .unwrap(),
+            "qq"
+        );
+        // 商店安装与更新仍沿用清单/现有目录的 ID。
+        assert_eq!(
+            resolve_install_id("install", "onebotv11".into(), None).unwrap(),
+            "onebotv11"
+        );
+        assert_eq!(
+            resolve_install_id(
+                "update",
+                "onebotv11".into(),
+                Some("https://github.com/xinxiuzhu/nuono-adapter-qq.git"),
+            )
+            .unwrap(),
+            "onebotv11"
+        );
+        // 仓库名推断不出合法 ID 时直接报错，不再退回表单值。
+        assert!(
+            resolve_install_id(
+                "install",
+                "fallback".into(),
+                Some("https://github.com/xinxiuzhu/nuono-adapter-"),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn failed_kind_switch_persist_restores_source_and_kind() {
+        let root = tempfile::tempdir().unwrap();
+        let jobs = root.path().join("data/.plugin-jobs");
+        fs::create_dir_all(jobs.parent().unwrap()).unwrap();
+        fs::write(&jobs, "blocked").unwrap();
+        let mut job = job("install");
+        job.repo_url = Some("https://example.invalid/nuono-adapter-demo.git".into());
+        job.staged_name = Some(".nuono-install-fixture".into());
+        let staged = staged_install(root.path(), &job, ADAPTER_MANIFEST);
+
+        assert!(adopt_declared_kind(root.path(), &jobs, &mut job, &staged).is_err());
+        assert_eq!(job.kind, SourceKind::Plugin);
+        assert!(staged.join("Cargo.toml").is_file());
+        assert!(!root.path().join("adapters/.nuono-install-fixture").exists());
     }
     #[test]
     fn build_logs_hide_bare_sensitive_environment_values_and_credentials() {
