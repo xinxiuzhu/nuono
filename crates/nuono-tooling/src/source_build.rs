@@ -923,7 +923,10 @@ pub fn build_candidate_prepared_locked(
         command.arg("--offline");
     }
     preparation.finish();
-    let compilation = crate::startup_progress::Stage::visible("Cargo 编译宿主与插件");
+    let compilation = crate::startup_progress::Stage::visible_with(
+        "Cargo 编译宿主与插件",
+        "Cargo 正在编译宿主与插件，请等待",
+    );
     let binary = cargo_build::run(&mut command, &project.join("Cargo.toml"), output)
         .context("应用构建失败")?;
     compilation.finish();
