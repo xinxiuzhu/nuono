@@ -431,19 +431,34 @@ pub(crate) async fn submit_checkout(
     submit(state, id, "update", None, Some(commit), Some(expected)).await
 }
 
-/// 解析安装任务最终使用的扩展 ID。
-///
-/// 链接安装（请求带仓库地址）时，表单里的 ID 只是占位，真实 ID 由仓库地址推断；
-/// 商店安装、更新和版本切换沿用商店清单或现有目录的 ID。
-fn resolve_install_id(
-    operation: &str,
-    requested: String,
-    repo_url: Option<&str>,
-) -> Result<String, String> {
-    match (operation, repo_url) {
-        ("install", Some(repo_url)) => super::link_install_id(repo_url),
-        _ => Ok(requested),
+/// 解析 Git 链接安装使用的扩展 ID：用户显式填写时校验并沿用该 ID，留空则由仓库地址自动推导。
+fn resolve_link_install_id(repo_url: &str, requested_id: Option<&str>) -> Result<String, String> {
+    if let Some(custom) = requested_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if !is_valid_plugin_id(custom) {
+            return Err("扩展 ID 只能包含字母、数字、连字符和下划线，且不能使用保留名称".into());
+        }
+        return Ok(custom.to_string());
     }
+    super::link_install_id(repo_url)
+}
+
+pub(crate) async fn submit_link_install(
+    state: OperationContext,
+    repo_url: String,
+    requested_id: Option<String>,
+) -> OpResult<StoreJob> {
+    let repo_url = repo_url.trim().to_string();
+    if !is_valid_repo_url(&repo_url) {
+        return Err(OpError::invalid(
+            "仓库地址无效，请使用无密码的 HTTPS 或 SSH Git 地址",
+        ));
+    }
+    let id =
+        resolve_link_install_id(&repo_url, requested_id.as_deref()).map_err(OpError::invalid)?;
+    submit(state, id, "install", Some(repo_url), None, None).await
 }
 
 pub(crate) async fn submit(
@@ -457,7 +472,7 @@ pub(crate) async fn submit(
     let (kind, id) = super::parse_source_key(&id).map_err(OpError::invalid)?;
     if !is_valid_plugin_id(&id) {
         return Err(OpError::invalid(
-            "插件 ID 只能包含字母、数字、连字符和下划线",
+            "扩展 ID 只能包含字母、数字、连字符和下划线，且不能使用保留名称",
         ));
     }
     if crate::backup::transfer::is_pending(&state.data)
@@ -479,8 +494,6 @@ pub(crate) async fn submit(
             "仓库地址无效，请使用无密码的 HTTPS 或 SSH Git 地址",
         ));
     }
-    // 链接安装的 ID 已「架空」：表单值只保留 adapter: 类型前缀的作用，目录名由仓库地址决定。
-    let id = resolve_install_id(operation, id, repo_url.as_deref()).map_err(OpError::invalid)?;
     let Ok(guard) = source_build::operation_lock().try_lock_owned() else {
         return Err(OpError::conflict(
             "已有插件构建或缓存维护正在运行，请在任务列表查看进度",
@@ -696,21 +709,28 @@ async fn run_job(
         .map_err(|e| e.to_string())?;
     } else {
         let config = state.config.snapshot().await;
-        let plugin = find_store_plugin(
-            &super::source_key(job.kind, &job.plugin_id),
-            &config.plugin_store,
-        )
-        .await?;
         if job.operation == "install" {
             job.staged_name = Some(format!(".nuono-install-{}", job.id));
-            phase(&directory, job, "downloading", "正在下载插件源码")?;
+            phase(&directory, job, "downloading", "正在下载扩展源码")?;
             let staged = root
                 .join(job.kind.directory())
                 .join(job.staged_name.as_ref().unwrap());
             fs::create_dir_all(root.join(job.kind.directory())).map_err(|e| e.to_string())?;
-            let repo = select_repo(job.repo_url.as_deref(), plugin.as_ref())?;
+            let (repo, pre_clone_commit) = if let Some(requested_repo) = job.repo_url.as_deref() {
+                // 链接安装需等克隆并读取 Cargo.toml 确认真实类型后再查商店条目，
+                // 避免适配器绕过商店策略，也避免与同名插件发生误拦截。
+                (requested_repo.to_string(), None)
+            } else {
+                let plugin = find_store_plugin(
+                    &super::source_key(job.kind, &job.plugin_id),
+                    &config.plugin_store,
+                )
+                .await?;
+                let repo = select_repo(None, plugin.as_ref())?;
+                (repo, plugin.and_then(|plugin| plugin.pinned_commit))
+            };
             if !is_valid_repo_url(&repo) {
-                return Err("插件仓库地址无效".into());
+                return Err("扩展仓库地址无效".into());
             }
             logged_git(
                 root,
@@ -723,25 +743,40 @@ async fn run_job(
                 output.clone(),
             )
             .await?;
-            if let Some(commit) = plugin.as_ref().and_then(|p| p.pinned_commit.as_ref()) {
-                logged_git(
-                    &staged,
-                    vec!["checkout".into(), "--detach".into(), commit.clone()],
-                    output.clone(),
-                )
-                .await?;
-            }
-            // 链接安装只提交裸 ID，类型由仓库清单决定：适配器清单不能继续按插件安装。
+            // 链接安装的类型由仓库清单决定：适配器清单切到 adapters/ 暂存目录并同步任务记录。
             let staged = adopt_declared_kind(root, &directory, job, &staged)?;
             target = root.join(job.kind.directory()).join(&job.plugin_id);
             if let Err(error) = staging::seal(&directory, job, &staged) {
                 tracing::warn!(%error, "暂存源码封存失败，将保留目录");
+            }
+            let pinned_commit = if job.repo_url.is_some() {
+                let plugin = find_store_plugin(
+                    &super::source_key(job.kind, &job.plugin_id),
+                    &config.plugin_store,
+                )
+                .await?;
+                enforce_link_install_store_policy(job, plugin.as_ref())?
+            } else {
+                pre_clone_commit
+            };
+            if let Some(commit) = pinned_commit {
+                logged_git(
+                    &staged,
+                    vec!["checkout".into(), "--detach".into(), commit],
+                    output.clone(),
+                )
+                .await?;
             }
             if target.exists() {
                 return Err("扩展目录已存在；已安装的扩展请使用更新".into());
             }
             fs::rename(&staged, &target).map_err(|e| e.to_string())?;
         } else {
+            let plugin = find_store_plugin(
+                &super::source_key(job.kind, &job.plugin_id),
+                &config.plugin_store,
+            )
+            .await?;
             let origin = git::origin(&target).await?;
             let explicit = job.target_commit.is_some();
             let commit = if let Some(commit) = &job.target_commit {
@@ -895,6 +930,16 @@ async fn run_job(
         }
     }
     Ok(())
+}
+
+/// 链接安装确认真实类型后，按最终 `(kind, id)` 核对商店策略：
+/// 若同类型同 ID 已上架商店，禁止使用非商店仓库覆盖，并返回商店固定的 commit（若有）。
+fn enforce_link_install_store_policy(
+    job: &StoreJob,
+    store_plugin: Option<&super::StorePlugin>,
+) -> Result<Option<String>, String> {
+    select_repo(job.repo_url.as_deref(), store_plugin)?;
+    Ok(store_plugin.and_then(|plugin| plugin.pinned_commit.clone()))
 }
 
 /// 链接安装按仓库清单决定类型：清单声明为适配器时把暂存源码移入 `adapters/`
@@ -1158,39 +1203,96 @@ mod tests {
     }
 
     #[test]
-    fn link_install_ignores_the_requested_id() {
+    fn link_install_id_respects_custom_or_derives_from_repo() {
         assert_eq!(
-            resolve_install_id(
-                "install",
-                "typed-by-user".into(),
-                Some("https://github.com/xinxiuzhu/nuono-adapter-qq.git"),
+            resolve_link_install_id("https://github.com/xinxiuzhu/nuono-adapter-qq.git", None)
+                .unwrap(),
+            "qq"
+        );
+        assert_eq!(
+            resolve_link_install_id(
+                "https://github.com/xinxiuzhu/nuono-adapter-qq.git",
+                Some("   "),
             )
             .unwrap(),
             "qq"
         );
-        // 商店安装与更新仍沿用清单/现有目录的 ID。
         assert_eq!(
-            resolve_install_id("install", "onebotv11".into(), None).unwrap(),
-            "onebotv11"
-        );
-        assert_eq!(
-            resolve_install_id(
-                "update",
-                "onebotv11".into(),
-                Some("https://github.com/xinxiuzhu/nuono-adapter-qq.git"),
+            resolve_link_install_id(
+                "https://github.com/xinxiuzhu/nuono-adapter-qq.git",
+                Some("qq-fork"),
             )
             .unwrap(),
-            "onebotv11"
+            "qq-fork"
         );
-        // 仓库名推断不出合法 ID 时直接报错，不再退回表单值。
+        // 仓库名撞保留字时，用户可通过显式 ID 正常安装。
+        assert_eq!(
+            resolve_link_install_id("https://github.com/xinxiuzhu/hub", Some("my-hub")).unwrap(),
+            "my-hub"
+        );
+        // 留空且无法从仓库名推导合法 ID 时报错并引导显式填写。
         assert!(
-            resolve_install_id(
-                "install",
-                "fallback".into(),
-                Some("https://github.com/xinxiuzhu/nuono-adapter-"),
+            resolve_link_install_id("https://github.com/xinxiuzhu/nuono-adapter-", None).is_err()
+        );
+        // 显式 ID 不允许包含非法字符、保留名或 adapter: 前缀。
+        assert!(
+            resolve_link_install_id(
+                "https://github.com/xinxiuzhu/nuono-adapter-qq.git",
+                Some("hub"),
             )
             .is_err()
         );
+        assert!(
+            resolve_link_install_id(
+                "https://github.com/xinxiuzhu/nuono-adapter-qq.git",
+                Some("adapter:qq"),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn link_install_store_policy_checks_adopted_adapter_kind() {
+        let root = tempfile::tempdir().unwrap();
+        let jobs = root.path().join("data/.plugin-jobs");
+        let mut job = job("install");
+        job.plugin_id = "qq".into();
+        job.repo_url = Some("https://evil.example/nuono-adapter-qq.git".into());
+        job.staged_name = Some(".nuono-install-adapter-policy".into());
+        let staged = staged_install(root.path(), &job, ADAPTER_MANIFEST);
+
+        adopt_declared_kind(root.path(), &jobs, &mut job, &staged).unwrap();
+        assert_eq!(
+            super::super::source_key(job.kind, &job.plugin_id),
+            "adapter:qq"
+        );
+
+        let official_adapter = super::super::StorePlugin {
+            kind: SourceKind::Adapter,
+            id: "qq".into(),
+            name: "QQ".into(),
+            version: "0.1.0".into(),
+            description: String::new(),
+            author: String::new(),
+            repo_url: "https://github.com/xinxiuzhu/nuono-adapter-qq.git".into(),
+            pinned_commit: Some("a".repeat(40)),
+            license: None,
+            installed: false,
+            installed_version: None,
+            installed_commit: None,
+            update_available: false,
+            running_version: None,
+            running_commit: None,
+            pending_restart: false,
+        };
+        assert!(enforce_link_install_store_policy(&job, Some(&official_adapter)).is_err());
+
+        job.repo_url = Some(official_adapter.repo_url.clone());
+        assert_eq!(
+            enforce_link_install_store_policy(&job, Some(&official_adapter)).unwrap(),
+            official_adapter.pinned_commit
+        );
+        assert_eq!(enforce_link_install_store_policy(&job, None).unwrap(), None);
     }
 
     #[test]

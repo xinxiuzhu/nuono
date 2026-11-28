@@ -1,6 +1,7 @@
 //! 持久化源码插件操作任务（安装、更新、卸载、重试、重启）的 HTTP 接口。
 use super::{
-    ApiResponse, AppState, InstallBody, Json, OpenApiRouter, Path, State, context, routes,
+    ApiResponse, AppState, InstallBody, Json, LinkInstallBody, OpenApiRouter, Path, State, context,
+    routes,
 };
 use crate::source_operations::jobs::{self, StoreJob, StoreJobs};
 use serde::Deserialize;
@@ -8,6 +9,7 @@ use serde::Deserialize;
 pub(super) fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_jobs))
+        .routes(routes!(install_from_repo))
         .routes(routes!(install))
         .routes(routes!(update))
         .routes(routes!(uninstall))
@@ -28,13 +30,23 @@ async fn list_jobs(
         Err(error) => ApiResponse::from_err(&error.0),
     }
 }
-#[utoipa::path(post, path="/store/install/{id}", operation_id="plugin_store_install", tag="plugin_store", description="从商店或 Git 仓库链接安装扩展。链接安装会忽略表单 ID：ID 由仓库地址推断（nuono-adapter-qq → qq），类型由仓库清单决定（适配器自动装进适配器目录）。商店安装仍使用商店清单的 ID。", request_body=InstallBody, params(("id"=String,Path)), responses((status=200, body=ApiResponse<crate::source_schemas::StoreJobSchema>)))]
+#[utoipa::path(post, path="/store/install", operation_id="plugin_store_install_from_repo", tag="plugin_store", description="从 Git 仓库链接安装扩展。类型由仓库 Cargo.toml 自动识别（适配器自动装入 adapters/）；扩展 ID 为选填，留空时自动从仓库地址推导（如 nuono-adapter-qq → qq）。", request_body=LinkInstallBody, responses((status=200, body=ApiResponse<crate::source_schemas::StoreJobSchema>)))]
+async fn install_from_repo(
+    State(state): State<AppState>,
+    Json(body): Json<LinkInstallBody>,
+) -> crate::api::ApiReply<StoreJob> {
+    match jobs::submit_link_install(context(&state), body.repo_url, body.id).await {
+        Ok(job) => ApiResponse::ok(job),
+        Err(error) => ApiResponse::from_err(&error.0),
+    }
+}
+#[utoipa::path(post, path="/store/install/{id}", operation_id="plugin_store_install", tag="plugin_store", description="从插件商店目录安装指定扩展（商店条目自带类型与 ID，适配器路径带 adapter: 前缀）。", request_body=InstallBody, params(("id"=String,Path)), responses((status=200, body=ApiResponse<crate::source_schemas::StoreJobSchema>)))]
 async fn install(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(body): Json<InstallBody>,
+    Json(_body): Json<InstallBody>,
 ) -> crate::api::ApiReply<StoreJob> {
-    match jobs::submit(context(&state), id, "install", body.repo_url, None, None).await {
+    match jobs::submit(context(&state), id, "install", None, None, None).await {
         Ok(job) => ApiResponse::ok(job),
         Err(error) => ApiResponse::from_err(&error.0),
     }

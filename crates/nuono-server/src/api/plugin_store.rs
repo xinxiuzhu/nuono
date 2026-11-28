@@ -32,10 +32,18 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(check_installed))
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
 #[schema(as = api::plugin_store::InstallBody)]
-pub struct InstallBody {
-    pub repo_url: Option<String>,
+pub struct InstallBody {}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = api::plugin_store::LinkInstallBody)]
+pub struct LinkInstallBody {
+    pub repo_url: String,
+    #[serde(default)]
+    pub id: Option<String>,
 }
 
 #[utoipa::path(

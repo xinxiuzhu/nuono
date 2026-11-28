@@ -329,6 +329,18 @@ async fn legacy_routes_distinguish_bad_input_missing_state_and_conflicts() {
             404,
         ),
         ("POST", "/api/store/install/invalid!", json!({}), 400),
+        (
+            "POST",
+            "/api/store/install",
+            json!({"repo_url":"file:///tmp/bad"}),
+            400,
+        ),
+        (
+            "POST",
+            "/api/store/install",
+            json!({"repo_url":"https://github.com/xinxiuzhu/nuono-adapter-qq.git","id":"hub"}),
+            400,
+        ),
         ("POST", "/api/store/jobs/not-a-uuid/retry", Value::Null, 400),
         (
             "POST",
