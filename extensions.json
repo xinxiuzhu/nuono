@@ -1,0 +1,38 @@
+{
+  "extensions": [
+    {
+      "author": "MoonShadow1976",
+      "commit": "f747b536e4efce748708d549b9a5e611d33a1e06",
+      "description": "Nuono 表情包制作插件，对接 meme-generator-rs API，支持选项、快捷指令、图片与 GIF 操作",
+      "id": "nuono-plugin-memes-api",
+      "kind": "plugin",
+      "license": "GPL-3.0-only",
+      "name": "表情包制作",
+      "repo": "https://github.com/MoonShadow1976/nuono-plugin-memes-api.git",
+      "version": "0.3.0"
+    },
+    {
+      "author": "Nuono Team",
+      "commit": "16e784e3ecc443172495fe7957ad226b27de7605",
+      "description": "OneBot v11 协议适配器，为 Nuono 提供反向 WebSocket 连接、事件归一化与消息收发能力",
+      "id": "onebotv11",
+      "kind": "adapter",
+      "license": "Apache-2.0",
+      "name": "OneBot v11",
+      "repo": "https://github.com/xinxiuzhu/nuono-adapter-onebotv11.git",
+      "version": "0.1.0"
+    },
+    {
+      "author": "Nuono Team",
+      "commit": "9e9bb8e3a4d487038547fc03a3093c87cbac63b0",
+      "description": "QQ 官方机器人协议适配器，为 Nuono 提供 WebSocket Gateway、HTTPS Webhook、扫码绑定、富媒体与流式回复能力",
+      "id": "qq_official",
+      "kind": "adapter",
+      "license": "Apache-2.0",
+      "name": "QQ 官方机器人",
+      "repo": "https://github.com/xinxiuzhu/nuono-adapter-qq.git",
+      "version": "0.1.0"
+    }
+  ],
+  "schema_version": 1
+}
