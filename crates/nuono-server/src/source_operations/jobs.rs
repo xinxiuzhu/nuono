@@ -315,9 +315,9 @@ pub(crate) async fn list_jobs(
     } else if !tools_available {
         "安装和更新需要 Git、Cargo。请先在服务器安装缺少的工具。"
     } else if !supervised() {
-        "安装完成后，请在终端停止当前进程，再运行 cargo run（发布模式使用 cargo run --release）。"
+        "安装完成后，可继续拉取其他插件，全部部署完成后再手动重启 Nuono（开发模式运行 cargo run，发布模式运行 cargo run --release）。"
     } else {
-        "构建完成后可重启应用。卸载后将清理插件注册和群设置，配置文件、密钥及业务数据保留。"
+        "部署完成后等待重启生效，可继续拉取其他插件后统一重启。卸载后将清理插件注册和群设置，配置文件、密钥及业务数据保留。"
     };
     Ok(StoreJobs {
         jobs: jobs
@@ -831,9 +831,9 @@ async fn run_job(
     let publication = source_build::prepare_job_candidate(root, &artifact, &job.id, &build_lock)
         .map_err(|e| e.to_string())?;
     let restart_message = if job.operation == "uninstall" {
-        "卸载构建已完成，重启后清理插件注册和群设置；配置文件、密钥及业务数据保留"
+        "卸载部署已完成，等待重启后生效（可继续调整其他插件后统一重启）；配置文件、密钥及业务数据保留"
     } else {
-        "构建已完成，重启后生效；配置文件、密钥及业务数据保留"
+        "部署已完成，等待重启后生效（可继续安装或更新其他插件后统一重启）；配置文件、密钥及业务数据保留"
     };
     phase(&directory, job, "awaiting_restart", restart_message)?;
     source_build::complete_job_candidate(root, &publication, &build_lock)
@@ -944,7 +944,7 @@ pub(crate) fn health_attention(data: &FsPath) -> Result<Vec<(String, String, Str
             result.push((
                 format!("plugin-job:{}", job.id),
                 format!("{} 等待重启生效", job.plugin_id),
-                "源码已构建完成；请打开插件商店重启应用或按提示手动重启。".into(),
+                "源码已部署完成，等待重启服务后生效；可继续拉取其他插件后统一重启。".into(),
             ));
         }
     }

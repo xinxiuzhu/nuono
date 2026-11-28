@@ -96,17 +96,28 @@ async fn history_pages_stay_on_an_exact_reference_and_tags_resolve_to_commits() 
         first_page.repo_url.as_deref(),
         Some("https://example.invalid/demo.git")
     );
-    assert!(
+    assert_eq!(first_page.refs[0].name, "main");
+    assert_eq!(first_page.refs[0].kind, "branch");
+    assert!(first_page.refs[0].default);
+    assert_eq!(
         first_page
             .refs
             .iter()
-            .any(|r| r.name == "v0.1" && r.kind == "tag" && r.commit == first)
+            .filter(|r| r.kind == "branch" && (r.name == "main" || r.name == "origin/main"))
+            .count(),
+        1
     );
     assert!(
         first_page
             .refs
             .iter()
-            .any(|r| r.name == "stable" && r.kind == "branch" && r.commit == first)
+            .any(|r| r.name == "v0.1" && r.kind == "tag" && r.commit == first && !r.default)
+    );
+    assert!(
+        first_page
+            .refs
+            .iter()
+            .any(|r| r.name == "stable" && r.kind == "branch" && r.commit == first && !r.default)
     );
     let last_page = local_history(
         "demo",

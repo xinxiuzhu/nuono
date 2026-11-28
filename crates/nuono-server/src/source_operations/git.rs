@@ -26,6 +26,7 @@ struct GitRef {
     name: String,
     kind: String,
     commit: String,
+    default: bool,
 }
 #[derive(Serialize, utoipa::ToSchema)]
 struct GitCommit {
@@ -190,39 +191,92 @@ fn text_field(value: &str) -> String {
         .take(1024)
         .collect()
 }
-fn parse_refs(output: &str) -> Vec<GitRef> {
-    output
-        .lines()
-        .filter_map(|line| {
-            let fields = line.split('\0').collect::<Vec<_>>();
-            if fields.len() != 5 {
-                return None;
+/// 解析仓库分支与标签：自动识别远程默认主分支置顶，并合并与 `origin/<branch>` 同名的冗余本地克隆分支。
+fn parse_refs(output: &str, default_branch: Option<&str>) -> Vec<GitRef> {
+    let mut remote_origin_branches = std::collections::HashSet::<String>::new();
+    let mut raw: Vec<(bool, &str, String, String)> = Vec::new();
+    for line in output.lines() {
+        let fields = line.split('\0').collect::<Vec<_>>();
+        if fields.len() != 5 {
+            continue;
+        }
+        let commit = if fields[3] == "commit" {
+            fields[1]
+        } else if fields[4] == "commit" {
+            fields[2]
+        } else {
+            continue;
+        };
+        if !is_valid_commit(commit) {
+            continue;
+        }
+        if let Some(name) = fields[0].strip_prefix("refs/tags/") {
+            raw.push((false, "tag", text_field(name), commit.into()));
+        } else if let Some(name) = fields[0].strip_prefix("refs/remotes/origin/") {
+            if name == "HEAD" {
+                continue;
             }
-            let (kind, name) = if let Some(name) = fields[0].strip_prefix("refs/tags/") {
-                ("tag", name)
-            } else if let Some(name) = fields[0].strip_prefix("refs/heads/") {
-                ("branch", name)
-            } else {
-                let name = fields[0].strip_prefix("refs/remotes/")?;
-                if name.ends_with("/HEAD") {
-                    return None;
-                }
-                ("branch", name)
-            };
-            let commit = if fields[3] == "commit" {
-                fields[1]
-            } else if fields[4] == "commit" {
-                fields[2]
-            } else {
-                return None;
-            };
-            is_valid_commit(commit).then(|| GitRef {
-                name: text_field(name),
-                kind: kind.into(),
-                commit: commit.into(),
+            let clean = text_field(name);
+            remote_origin_branches.insert(clean.clone());
+            raw.push((false, "branch", clean, commit.into()));
+        } else if let Some(name) = fields[0].strip_prefix("refs/remotes/") {
+            if name.ends_with("/HEAD") {
+                continue;
+            }
+            raw.push((false, "branch", text_field(name), commit.into()));
+        } else if let Some(name) = fields[0].strip_prefix("refs/heads/") {
+            raw.push((true, "branch", text_field(name), commit.into()));
+        }
+    }
+
+    let mut refs: Vec<GitRef> = raw
+        .into_iter()
+        .filter(|(is_local, kind, name, _)| {
+            !(*is_local && *kind == "branch" && remote_origin_branches.contains(name))
+        })
+        .map(|(_, kind, name, commit)| GitRef {
+            name,
+            kind: kind.into(),
+            commit,
+            default: false,
+        })
+        .collect();
+
+    // 标记默认主分支：优先使用 `origin/HEAD` 指向的分支，缺失时依次回退 `main` / `master`。
+    let resolved_default = default_branch
+        .filter(|name| {
+            refs.iter()
+                .any(|item| item.kind == "branch" && item.name == *name)
+        })
+        .or_else(|| {
+            ["main", "master"].into_iter().find(|candidate| {
+                refs.iter()
+                    .any(|item| item.kind == "branch" && item.name == *candidate)
             })
         })
-        .collect()
+        .map(str::to_string);
+
+    if let Some(default_name) = resolved_default {
+        for item in &mut refs {
+            if item.kind == "branch" && item.name == default_name {
+                item.default = true;
+            }
+        }
+    }
+
+    refs.sort_by(|a, b| {
+        let rank = |item: &GitRef| -> u8 {
+            if item.default {
+                0
+            } else if item.kind == "branch" {
+                1
+            } else {
+                2
+            }
+        };
+        rank(a).cmp(&rank(b)).then_with(|| a.name.cmp(&b.name))
+    });
+    refs
 }
 fn parse_commits(output: &str) -> Vec<GitCommit> {
     let fields = output.split('\0').collect::<Vec<_>>();
@@ -323,7 +377,22 @@ async fn local_history(
         .map(|s| text_field(s.trim()));
     view.repo_url = origin(target).await.ok().and_then(|s| safe_repo_url(&s));
     view.dirty = source_dirty(target).await?;
-    view.refs = parse_refs(&run_git(target, &["for-each-ref", "--count=256", "--sort=refname", "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(objecttype)%00%(*objecttype)", "refs/heads/", "refs/remotes/", "refs/tags/"]).await?);
+    let default_branch = run_git(
+        target,
+        &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+    )
+    .await
+    .ok()
+    .and_then(|s| {
+        s.trim()
+            .strip_prefix("refs/remotes/origin/")
+            .map(text_field)
+    })
+    .filter(|name| !name.is_empty());
+    view.refs = parse_refs(
+        &run_git(target, &["for-each-ref", "--count=256", "--sort=refname", "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(objecttype)%00%(*objecttype)", "refs/heads/", "refs/remotes/", "refs/tags/"]).await?,
+        default_branch.as_deref(),
+    );
     let log = run_git(
         target,
         &[
